@@ -1,0 +1,762 @@
+import esper
+import pygame
+import math
+from components import (
+    Position, Velocity, Physics, Health, Damage, Renderable,
+    ArenaBoundary, Rotation, OrbitalItem, Item, EquippedItem, HitboxRect,
+    SpawnProtection, DamageCooldown, Player,
+)
+
+# Global debug prints (can be enabled during development)
+DEBUG_ENABLED = False
+# Toggle visibility of hitbox outlines in the renderer
+SHOW_HITBOXES = True
+# Shield will block only if the attack comes from within this half-angle (degrees)
+SHIELD_BLOCK_HALF_ANGLE_DEG = 60.0
+SHIELD_BLOCK_HALF_ANGLE_COS = math.cos(math.radians(SHIELD_BLOCK_HALF_ANGLE_DEG))
+
+
+class MovementSystem(esper.Processor):
+    '''Update entity positions using their velocities.'''
+    def process(self, dt):
+        for ent, (pos, vel) in esper.get_components(Position, Velocity):
+            pos.x += vel.vx * dt
+            pos.y += vel.vy * dt
+
+
+class WallCollisionSystem(esper.Processor):
+    '''Handle collision between entities and the arena walls.'''
+    def process(self, dt):
+        arena_ent, arena = esper.get_component(ArenaBoundary)[0]
+
+        for ent, (pos, vel, phys) in esper.get_components(Position, Velocity, Physics):
+            hitbox_rect = esper.try_component(ent, HitboxRect)
+            
+            if hitbox_rect:
+                # For rectangular hitboxes, calculate AABB bounds
+                rot_comp = esper.try_component(ent, Rotation)
+                angle = rot_comp.angle if rot_comp else 0.0
+                
+                # Calculate AABB of rotated rect
+                half_w = hitbox_rect.width / 2.0
+                half_h = hitbox_rect.height / 2.0
+                corners = [(-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h)]
+                a = math.radians(angle)
+                ca = math.cos(a)
+                sa = math.sin(a)
+                
+                cx = pos.x + hitbox_rect.offset_x
+                cy = pos.y + hitbox_rect.offset_y
+                
+                xs = []
+                ys = []
+                for (ox, oy) in corners:
+                    wx = ca * ox - sa * oy + cx
+                    wy = sa * ox + ca * oy + cy
+                    xs.append(wx)
+                    ys.append(wy)
+                
+                minx, miny = min(xs), min(ys)
+                maxx, maxy = max(xs), max(ys)
+                
+                # Collision with walls using AABB
+                if minx < 0:
+                    pos.x += (0 - minx)
+                    vel.vx *= -phys.restitution
+                elif maxx > arena.width:
+                    pos.x -= (maxx - arena.width)
+                    vel.vx *= -phys.restitution
+
+                if miny < 0:
+                    pos.y += (0 - miny)
+                    vel.vy *= -phys.restitution
+                elif maxy > arena.height:
+                    pos.y -= (maxy - arena.height)
+                    vel.vy *= -phys.restitution
+            else:
+                # For circular entities, use radius
+                if pos.x - pos.radius < 0:
+                    pos.x = pos.radius
+                    vel.vx *= -phys.restitution
+                elif pos.x + pos.radius > arena.width:
+                    pos.x = arena.width - pos.radius
+                    vel.vx *= -phys.restitution
+
+                if pos.y - pos.radius < 0:
+                    pos.y = pos.radius
+                    vel.vy *= -phys.restitution
+                elif pos.y + pos.radius > arena.height:
+                    pos.y = arena.height - pos.radius
+                    vel.vy *= -phys.restitution
+
+
+class BallCollisionSystem(esper.Processor):
+    '''Handle physical collisions between balls and items (circle and AABB hitboxes).'''
+    def process(self, dt):
+        # Get all entities with position and physics components
+        collidable_entities = []
+        for ent, (pos, phys) in esper.get_components(Position, Physics):
+            collidable_entities.append((ent, pos, phys))
+
+        num_entities = len(collidable_entities)
+
+        # Helper functions for rotated-rect vs circle collisions
+        def circle_vs_rotated_rect(circle_x, circle_y, circle_r, rect_cx, rect_cy, rect_w, rect_h, rect_angle):
+            # Transform circle center into rect local space (rotate by -angle)
+            a = math.radians(rect_angle)
+            ca = math.cos(a)
+            sa = math.sin(a)
+            dx = circle_x - rect_cx
+            dy = circle_y - rect_cy
+            local_x = ca * dx + sa * dy
+            local_y = -sa * dx + ca * dy
+
+            half_w = rect_w / 2.0
+            half_h = rect_h / 2.0
+            nearest_x = max(-half_w, min(local_x, half_w))
+            nearest_y = max(-half_h, min(local_y, half_h))
+
+            nx_local = local_x - nearest_x
+            ny_local = local_y - nearest_y
+            dist_sq = nx_local * nx_local + ny_local * ny_local
+            if dist_sq >= (circle_r * circle_r):
+                return False, 0.0, 0.0, 0.0
+
+            dist = math.sqrt(dist_sq) if dist_sq > 0 else 0.0
+
+            # Normal in local space
+            if dist == 0:
+                nx_local_n, ny_local_n = 1.0, 0.0
+            else:
+                nx_local_n = nx_local / dist
+                ny_local_n = ny_local / dist
+
+            # Rotate normal back to world space
+            nx = ca * nx_local_n - sa * ny_local_n
+            ny = sa * nx_local_n + ca * ny_local_n
+
+            overlap = circle_r - dist
+            return True, nx, ny, overlap
+
+        def aabb_of_rotated_rect(rect_cx, rect_cy, rect_w, rect_h, rect_angle):
+            # compute axis-aligned bounding box of rotated rect
+            half_w = rect_w / 2.0
+            half_h = rect_h / 2.0
+            corners = [(-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h)]
+            a = math.radians(rect_angle)
+            ca = math.cos(a)
+            sa = math.sin(a)
+            xs = []
+            ys = []
+            for (ox, oy) in corners:
+                wx = ca * ox - sa * oy + rect_cx
+                wy = sa * ox + ca * oy + rect_cy
+                xs.append(wx)
+                ys.append(wy)
+            return min(xs), min(ys), max(xs), max(ys)
+
+        # Loop over all entity pairs
+        for i in range(num_entities):
+            ent1, pos1, phys1 = collidable_entities[i]
+
+            for j in range(i + 1, num_entities):
+                ent2, pos2, phys2 = collidable_entities[j]
+
+                ent1_rect = esper.try_component(ent1, HitboxRect)
+                ent2_rect = esper.try_component(ent2, HitboxRect)
+
+                collision = False
+                nx = 0.0
+                ny = 0.0
+                distance = 0.0
+                overlap = 0.0
+
+                # circle-circle
+                if not ent1_rect and not ent2_rect:
+                    dx = pos2.x - pos1.x
+                    dy = pos2.y - pos1.y
+                    distance_sq = dx*dx + dy*dy
+                    min_distance = pos1.radius + pos2.radius
+                    if distance_sq < (min_distance * min_distance) and distance_sq > 0:
+                        collision = True
+                        distance = math.sqrt(distance_sq)
+                        nx = dx / distance
+                        ny = dy / distance
+                        overlap = min_distance - distance
+
+                # circle (ent1) vs rect (ent2)
+                elif not ent1_rect and ent2_rect:
+                    rx = pos2.x + ent2_rect.offset_x
+                    ry = pos2.y + ent2_rect.offset_y
+                    rect_angle = 0.0
+                    rot_comp = esper.try_component(ent2, Rotation)
+                    if rot_comp:
+                        rect_angle = rot_comp.angle
+
+                    collided, nx, ny, overlap = circle_vs_rotated_rect(pos1.x, pos1.y, pos1.radius, rx, ry, ent2_rect.width, ent2_rect.height, rect_angle)
+                    if collided:
+                        collision = True
+
+                # rect (ent1) vs circle (ent2)
+                elif ent1_rect and not ent2_rect:
+                    rx = pos1.x + ent1_rect.offset_x
+                    ry = pos1.y + ent1_rect.offset_y
+                    rect_angle = 0.0
+                    rot_comp = esper.try_component(ent1, Rotation)
+                    if rot_comp:
+                        rect_angle = rot_comp.angle
+
+                    collided, nx, ny, overlap = circle_vs_rotated_rect(pos2.x, pos2.y, pos2.radius, rx, ry, ent1_rect.width, ent1_rect.height, rect_angle)
+                    if collided:
+                        nx, ny = -nx, -ny
+                        collision = True
+
+                # rect vs rect (use AABB of rotated rects as conservative test)
+                else:
+                    rx1 = pos1.x + ent1_rect.offset_x
+                    ry1 = pos1.y + ent1_rect.offset_y
+                    angle1 = 0.0
+                    rc1 = esper.try_component(ent1, Rotation)
+                    if rc1:
+                        angle1 = rc1.angle
+
+                    rx2 = pos2.x + ent2_rect.offset_x
+                    ry2 = pos2.y + ent2_rect.offset_y
+                    angle2 = 0.0
+                    rc2 = esper.try_component(ent2, Rotation)
+                    if rc2:
+                        angle2 = rc2.angle
+
+                    minx1, miny1, maxx1, maxy1 = aabb_of_rotated_rect(rx1, ry1, ent1_rect.width, ent1_rect.height, angle1)
+                    minx2, miny2, maxx2, maxy2 = aabb_of_rotated_rect(rx2, ry2, ent2_rect.width, ent2_rect.height, angle2)
+                    if (minx1 <= maxx2 and maxx1 >= minx2 and miny1 <= maxy2 and maxy1 >= miny2):
+                        collision = True
+                        dx = (rx2 - rx1)
+                        dy = (ry2 - ry1)
+                        dist = math.sqrt(dx*dx + dy*dy)
+                        if dist > 0:
+                            nx = dx / dist
+                            ny = dy / dist
+                        else:
+                            nx, ny = 1.0, 0.0
+                        # Calculate overlap more accurately using penetration depth
+                        overlap_x = min(maxx1 - minx2, maxx2 - minx1) if maxx1 > minx2 else 0
+                        overlap_y = min(maxy1 - miny2, maxy2 - miny1) if maxy1 > miny2 else 0
+                        overlap = min(overlap_x, overlap_y) if overlap_x > 0 and overlap_y > 0 else max(overlap_x, overlap_y)
+
+                if not collision:
+                    continue
+
+                # Move entities out of overlap using computed normal and overlap
+                total_mass = phys1.mass + phys2.mass
+                if total_mass == 0:
+                    total_mass = 1.0
+                move_ratio1 = phys2.mass / total_mass
+                move_ratio2 = phys1.mass / total_mass
+
+                pos1.x -= nx * overlap * move_ratio1
+                pos1.y -= ny * overlap * move_ratio1
+                pos2.x += nx * overlap * move_ratio2
+                pos2.y += ny * overlap * move_ratio2
+
+                # 3. Velocity Resolution (Relative Elastic Collision)
+                vel1 = esper.try_component(ent1, Velocity)
+                vel2 = esper.try_component(ent2, Velocity)
+
+                if vel1 and vel2:
+                    rvx = vel2.vx - vel1.vx
+                    rvy = vel2.vy - vel1.vy
+
+                    # Relative velocity along the normal
+                    vel_along_normal = rvx * nx + rvy * ny
+
+                    # Only apply velocity resolution if entities are approaching
+                    if vel_along_normal <= 0:
+                        # Coefficient of restitution (use the smaller)
+                        e = min(phys1.restitution, phys2.restitution)
+
+                        # Scalar impulse
+                        j_scalar = -(1 + e) * vel_along_normal
+
+                        # Safe inverse masses to avoid division by zero
+                        eps = 1e-8
+                        inv_m1 = 1.0 / phys1.mass if phys1.mass > eps else 0.0
+                        inv_m2 = 1.0 / phys2.mass if phys2.mass > eps else 0.0
+                        denom = inv_m1 + inv_m2
+                        if denom > eps:
+                            j_scalar = j_scalar / denom
+                        else:
+                            j_scalar = 0.0
+
+                        # Impulse vector
+                        impulse_x = j_scalar * nx
+                        impulse_y = j_scalar * ny
+
+                        # Apply impulse (if mass is zero, inv mass is zero so no change)
+                        if phys1.mass > eps:
+                            vel1.vx -= impulse_x * inv_m1
+                            vel1.vy -= impulse_y * inv_m1
+                        if phys2.mass > eps:
+                            vel2.vx += impulse_x * inv_m2
+                            vel2.vy += impulse_y * inv_m2
+
+                # 4. Damage and knockback application
+                # Damage Logic:
+                # - Body vs Body: Both bodies damage each other using their body_damage stat
+                # - Item vs Item: Each item damages the OTHER item's parent using item damage
+                # - Item vs Body: Item damages the body, Body damages the item's parent (mutual damage)
+                # - All damage is reduced by the target's equipped items' damage_reduction
+                
+                # Current time for cooldown checks
+                current_time = pygame.time.get_ticks() / 1000.0
+                
+                ent1_is_item = esper.has_component(ent1, OrbitalItem) and esper.has_component(ent1, Item)
+                ent2_is_item = esper.has_component(ent2, OrbitalItem) and esper.has_component(ent2, Item)
+                
+                # Helper function to get base damage from entity
+                def get_entity_damage(ent):
+                    if esper.has_component(ent, Item):
+                        return esper.component_for_entity(ent, Item).damage
+                    elif esper.has_component(ent, Damage):
+                        return esper.component_for_entity(ent, Damage).body_damage
+                    return 0
+                
+                # Helper function to calculate damage reduction for an entity
+                def get_damage_reduction(ent):
+                    if esper.has_component(ent, EquippedItem):
+                        equipped = esper.component_for_entity(ent, EquippedItem)
+                        total_reduction = sum(item.damage_reduction for item in equipped.items)
+                        return min(1.0, total_reduction)  # Cap at 100% reduction
+                    return 0.0
+                
+                # Helper function to get player name for logging
+                def get_player_name(ent):
+                    if esper.has_component(ent, Player):
+                        player_id = esper.component_for_entity(ent, Player).player_id
+                        return f"Player {player_id}"
+                    return f"Entity {ent}"
+
+                # Helper: get a human readable damage source description
+                def get_damage_source_desc(attacker_ent):
+                    if attacker_ent is None:
+                        return "Unknown source"
+                    # If the attacker is an item, include item name and owner
+                    if esper.has_component(attacker_ent, Item):
+                        item_c = esper.component_for_entity(attacker_ent, Item)
+                        orbital_c = esper.try_component(attacker_ent, OrbitalItem)
+                        owner = orbital_c.parent_entity if orbital_c else None
+                        owner_name = get_player_name(owner) if owner is not None else f"Entity {owner}"
+                        return f"{owner_name}'s item '{item_c.name}'"
+                    # If attacker is a body with Damage component
+                    if esper.has_component(attacker_ent, Damage):
+                        return f"{get_player_name(attacker_ent)}'s body"
+                    # Fallback
+                    return get_player_name(attacker_ent)
+                
+                vel1_comp = esper.try_component(ent1, Velocity)
+                vel2_comp = esper.try_component(ent2, Velocity)
+
+                # Apply knockback for items
+                if ent1_is_item or ent2_is_item:
+                    knockback_impulse = 0.0
+                    if ent1_is_item:
+                        item1_comp = esper.component_for_entity(ent1, Item)
+                        knockback_impulse += getattr(item1_comp, 'knockback_strength', 0.0)
+                    if ent2_is_item:
+                        item2_comp = esper.component_for_entity(ent2, Item)
+                        knockback_impulse += getattr(item2_comp, 'knockback_strength', 0.0)
+                    
+                    # Apply additional knockback impulse (pushes entities apart along collision normal)
+                    if knockback_impulse > 0 and vel1_comp and vel2_comp:
+                        eps = 1e-8
+                        inv_m1 = 1.0 / phys1.mass if phys1.mass > eps else 0.0
+                        inv_m2 = 1.0 / phys2.mass if phys2.mass > eps else 0.0
+                        knockback_x = knockback_impulse * nx
+                        knockback_y = knockback_impulse * ny
+                        # ent1 gets pushed away from ent2 (negative normal direction)
+                        if phys1.mass > eps:
+                            vel1_comp.vx -= knockback_x * inv_m1
+                            vel1_comp.vy -= knockback_y * inv_m1
+                        # ent2 gets pushed away from ent1 (positive normal direction)
+                        if phys2.mass > eps:
+                            vel2_comp.vx += knockback_x * inv_m2
+                            vel2_comp.vy += knockback_y * inv_m2
+
+                # body vs body
+                if not ent1_is_item and not ent2_is_item:
+                    # skip damage if either participant has spawn protection
+                    if esper.has_component(ent1, SpawnProtection) or esper.has_component(ent2, SpawnProtection):
+                        continue
+
+                    # Check damage cooldowns
+                    cooldown1 = esper.try_component(ent1, DamageCooldown)
+                    cooldown2 = esper.try_component(ent2, DamageCooldown)
+                    if cooldown1 and current_time - cooldown1.last_damage_time < cooldown1.cooldown_time:
+                        continue
+                    if cooldown2 and current_time - cooldown2.last_damage_time < cooldown2.cooldown_time:
+                        continue
+
+                    # Body vs Body: No damage reduction (shields don't help in body collisions)
+                    base_damage1 = get_entity_damage(ent1)
+                    base_damage2 = get_entity_damage(ent2)
+                    
+                    damage_to_ent1 = base_damage1
+                    damage_to_ent2 = base_damage2
+
+                    if esper.has_component(ent1, Health) and damage_to_ent2 > 0:
+                        health1 = esper.component_for_entity(ent1, Health)
+                        health1.current_hp -= damage_to_ent2
+                        print(f"{get_damage_source_desc(ent2)} dealt {damage_to_ent2} damage to {get_player_name(ent1)}")
+                        if cooldown1:
+                            cooldown1.last_damage_time = current_time
+
+                    if esper.has_component(ent2, Health) and damage_to_ent1 > 0:
+                        health2 = esper.component_for_entity(ent2, Health)
+                        health2.current_hp -= damage_to_ent1
+                        print(f"{get_damage_source_desc(ent1)} dealt {damage_to_ent1} damage to {get_player_name(ent2)}")
+                        if cooldown2:
+                            cooldown2.last_damage_time = current_time
+
+                # both are items -> do NOT apply damage to their parents
+                # Items colliding with each other should not directly reduce the health
+                # of the owning entities. Keep other collision effects (knockback) but
+                # skip health changes here.
+                elif ent1_is_item and ent2_is_item:
+                    item1_comp = esper.component_for_entity(ent1, Item)
+                    item2_comp = esper.component_for_entity(ent2, Item)
+                    orbital1 = esper.component_for_entity(ent1, OrbitalItem)
+                    orbital2 = esper.component_for_entity(ent2, OrbitalItem)
+
+                    parent1 = getattr(orbital1, 'parent_entity', None)
+                    parent2 = getattr(orbital2, 'parent_entity', None)
+
+                    # If both items belong to the same parent, ignore entirely
+                    if parent1 is not None and parent1 == parent2:
+                        continue
+
+                    # Optional: respect cooldowns or other side-effects, but do not
+                    # modify Health components for either parent in item-vs-item collisions.
+                    # This preserves intended knockback and physics while preventing
+                    # unintended health loss when two orbitals overlap.
+                    if DEBUG_ENABLED:
+                        p1_name = get_player_name(parent1) if parent1 is not None else f"Entity {parent1}"
+                        p2_name = get_player_name(parent2) if parent2 is not None else f"Entity {parent2}"
+                        print(f"Item vs Item collision between {get_damage_source_desc(ent1)} and {get_damage_source_desc(ent2)}; not applying HP changes to {p1_name} or {p2_name}.")
+
+                # one is item, other is body
+                else:
+                    if ent1_is_item:
+                        item_ent = ent1
+                        body_ent = ent2
+                    else:
+                        item_ent = ent2
+                        body_ent = ent1
+
+                    item_comp = esper.component_for_entity(item_ent, Item)
+                    orbital_comp = esper.component_for_entity(item_ent, OrbitalItem)
+                    parent_ent = getattr(orbital_comp, 'parent_entity', None)
+
+                    # Skip if item collided with its own parent (no self-damage)
+                    if parent_ent is not None and parent_ent == body_ent:
+                        continue
+
+                    # Skip damage if either entity has spawn protection
+                    if esper.has_component(body_ent, SpawnProtection):
+                        continue
+                    if parent_ent and esper.has_component(parent_ent, SpawnProtection):
+                        continue
+
+                    # Check damage cooldowns
+                    cooldown_body = esper.try_component(body_ent, DamageCooldown)
+                    cooldown_parent = parent_ent and esper.try_component(parent_ent, DamageCooldown)
+                    
+                    # Skip if either entity is on cooldown
+                    if cooldown_body and current_time - cooldown_body.last_damage_time < cooldown_body.cooldown_time:
+                        continue
+                    if cooldown_parent and current_time - cooldown_parent.last_damage_time < cooldown_parent.cooldown_time:
+                        continue
+
+                    # Item damages the body it collided with
+                    # NOTE: do NOT apply global equipped-item reductions to the body here —
+                    # reductions should only apply if the specific item (e.g., a shield)
+                    # was involved in the collision. Since the item is the collider, the
+                    # body's equipped items do not automatically reduce this hit.
+                    item_damage = item_comp.damage
+                    damage_to_body = int(item_damage)
+                    
+                    if esper.has_component(body_ent, Health) and damage_to_body > 0:
+                        health_body = esper.component_for_entity(body_ent, Health)
+                        # Check nearby orbital shields of the body to see if they intercepted the incoming item
+                        attacker_pos = esper.component_for_entity(item_ent, Position)
+                        attacker_radius = getattr(attacker_pos, 'radius', 0)
+                        # total reduction accumulated from any shields that intercepted
+                        intercepted_reduction = 0.0
+                        for shield_ent, (s_pos, s_orb) in esper.get_components(Position, OrbitalItem):
+                            if s_orb.parent_entity != body_ent:
+                                continue
+                            # shield must have an Item component and a HitboxRect to block
+                            shield_item = esper.try_component(shield_ent, Item)
+                            shield_hit = esper.try_component(shield_ent, HitboxRect)
+                            if not shield_item or not shield_hit:
+                                continue
+                            # rotation of shield
+                            shield_angle = 0.0
+                            shield_rot = esper.try_component(shield_ent, Rotation)
+                            if shield_rot:
+                                shield_angle = shield_rot.angle
+
+                            # precise test: circle (attacker item) vs rotated rect (shield)
+                            collided_shield, _, _, _ = circle_vs_rotated_rect(attacker_pos.x, attacker_pos.y, attacker_radius, s_pos.x + shield_hit.offset_x, s_pos.y + shield_hit.offset_y, shield_hit.width, shield_hit.height, shield_angle)
+                            if collided_shield:
+                                intercepted_reduction = max(intercepted_reduction, getattr(shield_item, 'damage_reduction', 0.0))
+
+                        # apply interception reduction if any shield intercepted
+                        if intercepted_reduction > 0.0:
+                            reduced = int(damage_to_body * (1 - intercepted_reduction))
+                            health_body.current_hp -= reduced
+                            pct = int(intercepted_reduction * 100)
+                            print(f"{get_damage_source_desc(item_ent)} dealt {reduced} damage to {get_player_name(body_ent)} (reduced from {damage_to_body} by {pct}%)")
+                        else:
+                            health_body.current_hp -= damage_to_body
+                            print(f"{get_damage_source_desc(item_ent)} dealt {damage_to_body} damage to {get_player_name(body_ent)}")
+                        if cooldown_body:
+                            cooldown_body.last_damage_time = current_time
+
+                    # Body damages the item's parent (mutual damage in collision)
+                    # Apply reduction only from the colliding item itself (e.g., a shield)
+                    body_damage = get_entity_damage(body_ent)
+                    # Determine if the colliding item is actually between the parent and the attacker
+                    item_block_reduction = 0.0
+                    try:
+                        if item_comp and parent_ent and esper.entity_exists(parent_ent):
+                            pos_item = esper.component_for_entity(item_ent, Position)
+                            pos_parent = esper.component_for_entity(parent_ent, Position)
+                            pos_body = esper.component_for_entity(body_ent, Position)
+                            # shield forward = from parent -> item
+                            fx = pos_item.x - pos_parent.x
+                            fy = pos_item.y - pos_parent.y
+                            f_len = math.hypot(fx, fy)
+                            if f_len > 0:
+                                fx /= f_len
+                                fy /= f_len
+                                # direction from parent to body
+                                bx = pos_body.x - pos_parent.x
+                                by = pos_body.y - pos_parent.y
+                                b_len = math.hypot(bx, by)
+                                if b_len > 0:
+                                    bx /= b_len
+                                    by /= b_len
+                                    dot = fx * bx + fy * by
+                                    # Debug info (prints removed to reduce log noise)
+
+                                    # Also check item's Rotation-based facing (useful if offsets or image orientation differ)
+                                    rot_comp = esper.try_component(item_ent, Rotation)
+                                    dot_rot = dot
+                                    if rot_comp:
+                                        a_rad = math.radians(rot_comp.angle)
+                                        rx = math.cos(a_rad)
+                                        ry = math.sin(a_rad)
+                                        dot_rot = rx * bx + ry * by
+
+                                    # if either positional radial check or rotation-based check passes, apply reduction
+                                    if dot >= SHIELD_BLOCK_HALF_ANGLE_COS or dot_rot >= SHIELD_BLOCK_HALF_ANGLE_COS:
+                                        item_block_reduction = getattr(item_comp, 'damage_reduction', 0.0)
+                    except Exception:
+                        item_block_reduction = getattr(item_comp, 'damage_reduction', 0.0) if item_comp else 0.0
+
+                    damage_to_parent = int(body_damage * (1 - item_block_reduction))
+                    
+                    if parent_ent and esper.entity_exists(parent_ent) and esper.has_component(parent_ent, Health) and damage_to_parent > 0:
+                        parent_health = esper.component_for_entity(parent_ent, Health)
+                        parent_health.current_hp -= damage_to_parent
+                        # If the item's shield reduced the damage, print both original and reduced values
+                        if item_block_reduction and item_block_reduction > 0.0:
+                            pct = int(item_block_reduction * 100)
+                            print(f"{get_damage_source_desc(body_ent)} dealt {damage_to_parent} damage to {get_player_name(parent_ent)} (reduced from {body_damage} by {pct}%)")
+                        else:
+                            print(f"{get_damage_source_desc(body_ent)} dealt {damage_to_parent} damage to {get_player_name(parent_ent)}")
+                        if cooldown_parent:
+                            cooldown_parent.last_damage_time = current_time
+
+
+class HealthSystem(esper.Processor):
+    '''Check entity health and remove entities whose HP <= 0.'''
+    def process(self, dt):
+        entities_to_destroy = []
+        for ent, health in esper.get_component(Health):
+            if health.current_hp <= 0:
+                entities_to_destroy.append(ent)
+
+        for ent in entities_to_destroy:
+            for item_ent, orbital in esper.get_component(OrbitalItem):
+                if orbital.parent_entity == ent:
+                    esper.delete_entity(item_ent)
+
+            esper.delete_entity(ent)
+            print(f'Entity {ent} has been destroyed.')
+
+
+class RotationSystem(esper.Processor):
+    '''Update entity rotation based on time.'''
+    def process(self, dt):
+        for ent, rot in esper.get_component(Rotation):
+            rot.angle += 180 * dt
+            rot.angle %= 360
+
+
+class SpawnProtectionSystem(esper.Processor):
+    '''Decrement spawn protection timers and remove the component when expired.'''
+    def process(self, dt):
+        for ent, protection in list(esper.get_component(SpawnProtection)):
+            protection.time -= dt
+            if protection.time <= 0:
+                try:
+                    esper.remove_component(ent, SpawnProtection)
+                except Exception:
+                    protection.time = 0
+
+
+class OrbitalSystem(esper.Processor):
+    '''Update positions of orbital items around their parent balls.'''
+    def process(self, dt):
+        for ent, (pos, orbital) in esper.get_components(Position, OrbitalItem):
+            if esper.entity_exists(orbital.parent_entity) and esper.has_component(orbital.parent_entity, Position):
+                parent_pos = esper.component_for_entity(orbital.parent_entity, Position)
+
+                orbital.angle += orbital.angular_speed * dt
+                orbital.angle %= 360
+
+                angle_rad = math.radians(orbital.angle)
+                pos.x = parent_pos.x + orbital.orbit_radius * math.cos(angle_rad)
+                pos.y = parent_pos.y + orbital.orbit_radius * math.sin(angle_rad)
+            else:
+                esper.delete_entity(ent)
+
+            # Keep the entity's Rotation in sync with its orbital angle (so image and rotated hitbox match)
+            rot = esper.try_component(ent, Rotation)
+            if rot:
+                rot.angle = orbital.angle
+
+
+class RenderSystem(esper.Processor):
+    '''Render entities to the screen.'''
+    def __init__(self, screen, font):
+        super().__init__()
+        self.screen = screen
+        self.font = font
+        self.image_cache = {}  # Cache for loaded images
+
+    def process(self, dt):
+        # Clear the screen
+        self.screen.fill((0, 0, 0)) # black
+
+        # Draw balls (entities with Health)
+        for ent, (pos, render, health) in esper.get_components(Position, Renderable, Health):
+            if render.image_path and render.image_path not in self.image_cache:
+                try:
+                    self.image_cache[render.image_path] = pygame.image.load(render.image_path).convert_alpha()
+                except Exception:
+                    # Catch missing files and other image load errors
+                    self.image_cache[render.image_path] = None
+
+            image = self.image_cache.get(render.image_path)
+            if image:
+                scaled_image = pygame.transform.scale(image, (pos.radius * 2, pos.radius * 2))
+
+                # Check for rotation
+                rot_component = esper.try_component(ent, Rotation)
+                if rot_component:
+                    scaled_image = pygame.transform.rotate(scaled_image, rot_component.angle)
+
+                rect = scaled_image.get_rect(center=(int(pos.x), int(pos.y)))
+                self.screen.blit(scaled_image, rect)
+            else:
+                # Fallback to circle
+                pygame.draw.circle(self.screen, render.color, (int(pos.x), int(pos.y)), pos.radius)
+
+            # Draw the health bar (simple text for now)
+            text = self.font.render(f'HP: {health.current_hp}', True, (255, 255, 255))
+            self.screen.blit(text, (pos.x - pos.radius, pos.y - pos.radius - 15))
+
+        # Draw orbital items (entities without Health)
+        for ent, (pos, render) in esper.get_components(Position, Renderable):
+            if esper.has_component(ent, Health):
+                continue
+
+            # Try to render image if provided
+            image = None
+            if render.image_path:
+                if render.image_path not in self.image_cache:
+                    try:
+                        self.image_cache[render.image_path] = pygame.image.load(render.image_path).convert_alpha()
+                    except Exception:
+                        self.image_cache[render.image_path] = None
+                image = self.image_cache.get(render.image_path)
+
+            hb = esper.try_component(ent, HitboxRect)
+            if image:
+                if hb:
+                    w, h = int(hb.width), int(hb.height)
+                    cx = int(pos.x + hb.offset_x)
+                    cy = int(pos.y + hb.offset_y)
+                else:
+                    w, h = int(pos.radius * 2), int(pos.radius * 2)
+                    cx, cy = int(pos.x), int(pos.y)
+
+                scaled = pygame.transform.scale(image, (max(1, w), max(1, h)))
+                # Apply rotation if present so image and hitbox match
+                rot_comp = esper.try_component(ent, Rotation)
+                if rot_comp:
+                    scaled = pygame.transform.rotate(scaled, rot_comp.angle)
+
+                rect = scaled.get_rect(center=(cx, cy))
+                self.screen.blit(scaled, rect)
+            else:
+                # Fallback to drawing a rect (if hitbox) or a circle
+                if hb:
+                    rect = pygame.Rect(int(pos.x + hb.offset_x - hb.width/2), int(pos.y + hb.offset_y - hb.height/2), int(hb.width), int(hb.height))
+                    pygame.draw.rect(self.screen, render.color, rect)
+                else:
+                    pygame.draw.circle(self.screen, render.color, (int(pos.x), int(pos.y)), pos.radius)
+        # Debug: draw hitbox outlines and shield facing vectors
+        if SHOW_HITBOXES:
+            for ent, (pos, hb) in esper.get_components(Position, HitboxRect):
+                rot_comp = esper.try_component(ent, Rotation)
+                angle = rot_comp.angle if rot_comp else 0.0
+                cx = pos.x + hb.offset_x
+                cy = pos.y + hb.offset_y
+                half_w = hb.width / 2.0
+                half_h = hb.height / 2.0
+                a = math.radians(angle)
+                ca = math.cos(a)
+                sa = math.sin(a)
+                corners = []
+                for (ox, oy) in [(-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h)]:
+                    wx = ca * ox - sa * oy + cx
+                    wy = sa * ox + ca * oy + cy
+                    corners.append((int(wx), int(wy)))
+
+                # Color shields differently
+                item_comp = esper.try_component(ent, Item)
+                color = (0, 255, 0) if (item_comp and getattr(item_comp, 'damage_reduction', 0) > 0) else (255, 0, 0)
+                try:
+                    pygame.draw.polygon(self.screen, color, corners, 1)
+                except Exception:
+                    pass
+
+                # If this is an orbital item, draw a line from parent to item to show facing
+                orbital = esper.try_component(ent, OrbitalItem)
+                if orbital and orbital.parent_entity and esper.entity_exists(orbital.parent_entity) and esper.has_component(orbital.parent_entity, Position):
+                    parent_pos = esper.component_for_entity(orbital.parent_entity, Position)
+                    pygame.draw.line(self.screen, (0, 128, 255), (int(parent_pos.x), int(parent_pos.y)), (int(pos.x), int(pos.y)), 1)
+
+            # Draw circular hitboxes for ball bodies (entities with Health)
+            for ent_b, (pos_b, render_b, health_b) in esper.get_components(Position, Renderable, Health):
+                try:
+                    # Yellow outline for body hitboxes
+                    pygame.draw.circle(self.screen, (255, 255, 0), (int(pos_b.x), int(pos_b.y)), int(pos_b.radius), 1)
+                except Exception:
+                    pass
+
+        # Flip display
+        pygame.display.flip()
