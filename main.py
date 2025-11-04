@@ -20,8 +20,8 @@ ARENA_Y = (SCREEN_HEIGHT - ARENA_SIZE) // 2
 MUSIC_VOLUME = 0.5
 MUSIC_PATH = os.path.join('sounds', 'bards_of_wyverndale.mp3')
 
-def ensure_music_playing():
-    '''Initialize mixer and start playing background music if available.'''
+def ensure_music_playing() -> None:
+    """Initialize mixer and start playing background music if available."""
     try:
         if not pygame.mixer.get_init():
             pygame.mixer.init()
@@ -33,26 +33,33 @@ def ensure_music_playing():
             except Exception:
                 pass
     except Exception:
-        # If audio initialization fails, skip silently
         pass
 
-def stop_music():
+
+def stop_music() -> None:
+    """Stop background music playback."""
     try:
         pygame.mixer.music.stop()
     except Exception:
         pass
 
-def main_menu(screen, clock, font):
-    '''Display the initial main menu with header and 3 buttons.
 
-    Returns: 'fight' to proceed to selection, 'quit' to exit, or None
-    '''
-    header_path = os.path.join('images', 'spt_Menu', 'Menu Header.png')
+def main_menu(screen: pygame.Surface, clock: pygame.time.Clock, font: pygame.font.Font) -> str:
+    """Display the initial main menu with header and 3 buttons.
+    
+    Args:
+        screen: The pygame display surface.
+        clock: The pygame clock for frame rate control.
+        font: The pygame font for rendering text.
+        
+    Returns:
+        'fight' to proceed to selection, 'quit' to exit.
+    """
+    header_path = os.path.join('images', 'spt_Menu', 'menu_header.png')
     header_img = None
     try:
         if os.path.exists(header_path):
             header_img = pygame.image.load(header_path).convert_alpha()
-            # scale header to cover the whole window
             header_img = pygame.transform.scale(header_img, (SCREEN_WIDTH, SCREEN_HEIGHT))
     except Exception:
         header_img = None
@@ -72,7 +79,6 @@ def main_menu(screen, clock, font):
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     return 'quit'
-                # keyboard navigation: W/S or Up/Down, select with E or Enter
                 if event.key in (pygame.K_w, pygame.K_UP):
                     selected_idx = (selected_idx - 1) % 3
                 if event.key in (pygame.K_s, pygame.K_DOWN):
@@ -81,7 +87,7 @@ def main_menu(screen, clock, font):
                     if selected_idx == 0:
                         return 'fight'
                     if selected_idx == 1:
-                        res = settings_menu(screen, clock, font)
+                        settings_menu(screen, clock, font)
                     if selected_idx == 2:
                         credits_menu(screen, clock, font)
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -89,7 +95,7 @@ def main_menu(screen, clock, font):
                 if fight_rect.collidepoint(mx, my):
                     return 'fight'
                 if settings_rect.collidepoint(mx, my):
-                    res = settings_menu(screen, clock, font)
+                    settings_menu(screen, clock, font)
                 if credits_rect.collidepoint(mx, my):
                     credits_menu(screen, clock, font)
 
@@ -97,24 +103,23 @@ def main_menu(screen, clock, font):
         try:
             screen.fill((12, 12, 18))
             if header_img:
-                # If header covers the whole screen, draw at 0,0
                 if header_img.get_size() == (SCREEN_WIDTH, SCREEN_HEIGHT):
                     screen.blit(header_img, (0, 0))
                 else:
                     hx = SCREEN_WIDTH//2 - header_img.get_width()//2
                     screen.blit(header_img, (hx, 60))
         except Exception:
-            screen.fill((12,12,18))
+            screen.fill((12, 12, 18))
 
-        # buttons (mouse hover or keyboard selected)
+        # Buttons
         mx, my = pygame.mouse.get_pos()
         options = ((fight_rect, 'FIGHT'), (settings_rect, 'SETTINGS'), (credits_rect, 'CREDITS'))
         for idx, (rect, text) in enumerate(options):
             hovered = rect.collidepoint(mx, my)
             is_selected = (selected_idx == idx)
-            color = (180,180,40) if (hovered or is_selected) else (200,200,200)
+            color = (180, 180, 40) if (hovered or is_selected) else (200, 200, 200)
             try:
-                pygame.draw.rect(screen, (30,30,30), rect)
+                pygame.draw.rect(screen, (30, 30, 30), rect)
                 pygame.draw.rect(screen, color, rect, 2)
                 txt = font.render(text, True, color)
                 screen.blit(txt, (rect.centerx - txt.get_width()//2, rect.centery - txt.get_height()//2))
@@ -124,7 +129,18 @@ def main_menu(screen, clock, font):
         pygame.display.flip()
         clock.tick(30)
 
-def settings_menu(screen, clock, font):
+
+def settings_menu(screen: pygame.Surface, clock: pygame.time.Clock, font: pygame.font.Font) -> str:
+    """Display the settings menu with a music volume slider.
+    
+    Args:
+        screen: The pygame display surface.
+        clock: The pygame clock for frame rate control.
+        font: The pygame font for rendering text.
+        
+    Returns:
+        'quit' to exit the game, 'back' to return to the main menu.
+    """
     global MUSIC_VOLUME
     slider_w = 360
     slider_h = 8
@@ -160,26 +176,23 @@ def settings_menu(screen, clock, font):
             except Exception:
                 pass
 
-        # draw
         try:
-            screen.fill((14,14,20))
-            title = font.render('Settings - Music Volume', True, (220,220,220))
+            screen.fill((14, 14, 20))
+            title = font.render('Settings - Music Volume', True, (220, 220, 220))
             screen.blit(title, (SCREEN_WIDTH//2 - title.get_width()//2, slider_y - 80))
 
-            # draw slider background
-            pygame.draw.rect(screen, (80,80,80), (slider_x, slider_y, slider_w, slider_h))
+            pygame.draw.rect(screen, (80, 80, 80), (slider_x, slider_y, slider_w, slider_h))
             filled = int(MUSIC_VOLUME * slider_w)
-            pygame.draw.rect(screen, (200,60,60), (slider_x, slider_y, filled, slider_h))
+            pygame.draw.rect(screen, (200, 60, 60), (slider_x, slider_y, filled, slider_h))
             knob_x = slider_x + filled
-            pygame.draw.circle(screen, (220,220,220), (knob_x, slider_y + slider_h//2), 10)
+            pygame.draw.circle(screen, (220, 220, 220), (knob_x, slider_y + slider_h//2), 10)
 
-            vol_txt = font.render(f'Volume: {int(MUSIC_VOLUME*100)}%', True, (200,200,200))
+            vol_txt = font.render(f'Volume: {int(MUSIC_VOLUME*100)}%', True, (200, 200, 200))
             screen.blit(vol_txt, (SCREEN_WIDTH//2 - vol_txt.get_width()//2, slider_y + 28))
 
-            # back button
-            pygame.draw.rect(screen, (40,40,40), back_rect)
-            pygame.draw.rect(screen, (200,200,200), back_rect, 2)
-            bt = font.render('BACK', True, (200,200,200))
+            pygame.draw.rect(screen, (40, 40, 40), back_rect)
+            pygame.draw.rect(screen, (200, 200, 200), back_rect, 2)
+            bt = font.render('BACK', True, (200, 200, 200))
             screen.blit(bt, (back_rect.centerx - bt.get_width()//2, back_rect.centery - bt.get_height()//2))
 
             pygame.display.flip()
@@ -188,7 +201,15 @@ def settings_menu(screen, clock, font):
 
         clock.tick(30)
 
-def credits_menu(screen, clock, font):
+
+def credits_menu(screen: pygame.Surface, clock: pygame.time.Clock, font: pygame.font.Font) -> None:
+    """Display the credits menu.
+    
+    Args:
+        screen: The pygame display surface.
+        clock: The pygame clock for frame rate control.
+        font: The pygame font for rendering text.
+    """
     lines = ['Credits', 'Dilson Simões', 'Guilherme Burkert', '\nPress ESC or click to return']
     while True:
         for event in pygame.event.get():
@@ -211,17 +232,23 @@ def credits_menu(screen, clock, font):
             pass
         clock.tick(30)
 
+
 world = None
 
 
-def reset_world():
+def reset_world() -> None:
+    """Reset the ECS world for a new match.
+    
+    Creates a unique world name and switches to it to guarantee a fresh context.
+    """
     global world
-    import time, random
-
+    import time
+    
     # Use a unique name per match to guarantee a fresh context
-    name = f'match_{int(time.time()*1000)}_{random.randint(0,9999)}'
+    name = f'match_{int(time.time()*1000)}_{random.randint(0, 9999)}'
     esper.switch_world(name)
     world = name
+
 
 # --- Items presets ---
 ITEMS_PRESETS = {       
@@ -276,8 +303,9 @@ CLASS_PRESETS = {
     # },
 }
 
-def initialize_world():
-    '''Register systems in the world in the desired processing order.'''
+
+def initialize_world() -> None:
+    """Register systems in the world in the desired processing order."""
     esper.add_processor(MovementSystem())
     esper.add_processor(WallCollisionSystem())
     esper.add_processor(SpawnProtectionSystem())
@@ -286,9 +314,21 @@ def initialize_world():
     esper.add_processor(RotationSystem())
     esper.add_processor(OrbitalSystem())
 
+
 # --- Initialization Functions ---
-def create_orbital_item(parent_ball, item_data, index, total_items):
-    '''Create an orbital item for a ball.'''
+
+def create_orbital_item(parent_ball, item_data: dict, index: int, total_items: int):
+    """Create an orbital item for a ball.
+    
+    Args:
+        parent_ball: The ball entity to which this item orbits.
+        item_data: Dictionary containing item configuration.
+        index: The index of this item among all orbiting items.
+        total_items: Total number of items orbiting the parent ball.
+        
+    Returns:
+        The entity ID of the created orbital item.
+    """
     item = esper.create_entity()
 
     esper.add_component(item, Position(0, 0, 6))
@@ -304,8 +344,41 @@ def create_orbital_item(parent_ball, item_data, index, total_items):
     esper.add_component(item, Renderable(item_data.get('color', (255, 255, 255)), item_data.get('image_path', None)))
     return item
 
-def create_ball(x, y, radius, color, mass, restitution, max_hp, body_damage, class_name, items, player_id, vx=0.0, vy=0.0):
-    '''Create a ball entity with all necessary components.'''
+
+def create_ball(
+    x: float,
+    y: float,
+    radius: int,
+    color: tuple,
+    mass: float,
+    restitution: float,
+    max_hp: int,
+    body_damage: int,
+    class_name: str,
+    items: list,
+    player_id: int,
+    vx: float = 0.0,
+    vy: float = 0.0
+):
+    """Create a ball entity with all necessary components.
+    
+    Args:
+        x, y: Initial position coordinates.
+        radius: Visual radius of the ball.
+        color: RGB color tuple of the ball.
+        mass: Physical mass for collision calculations.
+        restitution: Elasticity/bounce factor (0.0 to 1.0+).
+        max_hp: Maximum health points.
+        body_damage: Damage dealt on body collision.
+        class_name: Class type of the ball (e.g., 'Knight', 'Mage').
+        items: List of equipped item names or dictionaries.
+        player_id: Player ID (1 or 2) controlling this ball.
+        vx: Initial x-velocity (default 0.0).
+        vy: Initial y-velocity (default 0.0).
+        
+    Returns:
+        The entity ID of the created ball.
+    """
     ball = esper.create_entity()
 
     esper.add_component(ball, Position(x, y, radius))
@@ -343,8 +416,28 @@ def create_ball(x, y, radius, color, mass, restitution, max_hp, body_damage, cla
     
     return ball
 
-def select_classes_and_spawns(screen, clock, font, class_presets, bg_image=None):
-    '''Create the initial menu for class selection for two players and spawn selection.'''
+
+def select_classes_and_spawns(
+    screen: pygame.Surface,
+    clock: pygame.time.Clock,
+    font: pygame.font.Font,
+    class_presets: dict,
+    bg_image: pygame.Surface = None
+):
+    """Create the initial menu for class selection for two players and spawn selection.
+    
+    Args:
+        screen: The pygame display surface.
+        clock: The pygame clock for frame rate control.
+        font: The pygame font for rendering text.
+        class_presets: Dictionary of class configurations.
+        bg_image: Optional background image surface.
+        
+    Returns:
+        Tuple containing (class_name_p1, preset_p1, x1, y1, vx1, vy1,
+                         class_name_p2, preset_p2, x2, y2, vx2, vy2)
+        or 'back' if user returns to main menu.
+    """
     menu_options = list(class_presets.keys())
     selected_idx_p1 = 0
     selected_idx_p2 = 0
@@ -368,13 +461,10 @@ def select_classes_and_spawns(screen, clock, font, class_presets, bg_image=None)
                 if back_btn_rect.collidepoint(mx, my):
                     return 'back'
 
-            # Keyboard controls for navigation and confirmation
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    # go back to main menu
                     return 'back'
 
-                # Player 1 Controls: W/S to move selection, E to confirm
                 if not confirmed_p1:
                     if event.key == pygame.K_w:
                         selected_idx_p1 = (selected_idx_p1 - 1) % len(menu_options)
@@ -383,7 +473,6 @@ def select_classes_and_spawns(screen, clock, font, class_presets, bg_image=None)
                     if event.key == pygame.K_e:
                         confirmed_p1 = True
 
-                # Player 2 Controls: Up/Down to move selection, Enter to confirm
                 if not confirmed_p2:
                     if event.key == pygame.K_UP:
                         selected_idx_p2 = (selected_idx_p2 - 1) % len(menu_options)
@@ -412,7 +501,7 @@ def select_classes_and_spawns(screen, clock, font, class_presets, bg_image=None)
             color = (255, 255, 0) if i == selected_idx_p1 and not confirmed_p1 else (200, 200, 200)
             text = font.render(opt + ('  [CONF]' if confirmed_p1 and i == selected_idx_p1 else ''), True, color)
             screen.blit(text, (col1_x - text.get_width() // 2, 150 + i * 30))
-        # draw preview sprite for the currently selected option (player 1)
+        # Draw player 1 preview sprite
         try:
             sel_name = menu_options[selected_idx_p1]
             sel_preset = class_presets.get(sel_name)
@@ -426,7 +515,6 @@ def select_classes_and_spawns(screen, clock, font, class_presets, bg_image=None)
                         surf = None
                     menu_image_cache[ip] = surf
                 if surf:
-                    # scale preview to class radius * 2 or max 120 (apply global visual reduction)
                     r = sel_preset.get('radius', 32)
                     size = min(120, int(r * 2 * 0.7))
                     try:
@@ -445,7 +533,8 @@ def select_classes_and_spawns(screen, clock, font, class_presets, bg_image=None)
             color = (255, 255, 0) if i == selected_idx_p2 and not confirmed_p2 else (200, 200, 200)
             text = font.render(opt + ('  [CONF]' if confirmed_p2 and i == selected_idx_p2 else ''), True, color)
             screen.blit(text, (col2_x - text.get_width() // 2, 150 + i * 30))
-        # draw preview sprite for the currently selected option (player 2)
+        
+        # Draw player 2 preview sprite
         try:
             sel_name = menu_options[selected_idx_p2]
             sel_preset = class_presets.get(sel_name)
@@ -478,7 +567,7 @@ def select_classes_and_spawns(screen, clock, font, class_presets, bg_image=None)
         back_btn = pygame.Rect(12, SCREEN_HEIGHT - 60, 96, 36)
         try:
             pygame.draw.rect(screen, (30,30,30), back_btn)
-            bt = font.render('VOLTAR', True, (200,200,200))
+            bt = font.render('RETURN', True, (200,200,200))
             screen.blit(bt, (back_btn.centerx - bt.get_width()//2, back_btn.centery - bt.get_height()//2))
         except Exception:
             pass
@@ -495,11 +584,10 @@ def select_classes_and_spawns(screen, clock, font, class_presets, bg_image=None)
     preset_p1 = class_presets[chosen_p1]
     preset_p2 = class_presets[chosen_p2]
 
-    # 2. Spawn selection
     spawn_confirmed_p1 = False
     spawn_confirmed_p2 = False
 
-    # Start cursors inside the arena: left and right quarters of the arena
+    # Start cursors inside the arena: left and right quarters
     cursor_p1 = [ARENA_X + ARENA_SIZE * 0.25, ARENA_Y + ARENA_SIZE * 0.5]
     cursor_p2 = [ARENA_X + ARENA_SIZE * 0.75, ARENA_Y + ARENA_SIZE * 0.5]
     move_speed = 6
@@ -510,6 +598,10 @@ def select_classes_and_spawns(screen, clock, font, class_presets, bg_image=None)
             if event.type == pygame.QUIT:
                 pygame.quit()
                 return None
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                mx, my = event.pos
+                if back_btn_rect.collidepoint(mx, my):
+                    return 'back'
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     return 'back'
@@ -568,36 +660,31 @@ def select_classes_and_spawns(screen, clock, font, class_presets, bg_image=None)
                 screen.fill((20, 20, 20))
         else:
             screen.fill((20, 20, 20))
-        # Draw the arena rectangle so players can see spawning bounds
+        
+        # Draw arena bounds
         try:
             pygame.draw.rect(screen, (40, 40, 40), pygame.Rect(int(ARENA_X), int(ARENA_Y), int(ARENA_SIZE), int(ARENA_SIZE)), 2)
         except Exception:
             pass
+        
         info = font.render('Spawn select - P1: WASD + E to confirm | P2: Arrows + Enter', True, (220, 220, 220))
         screen.blit(info, (SCREEN_WIDTH // 2 - info.get_width() // 2, 20))
         pygame.draw.circle(screen, preset_p1['color'], (int(cursor_p1[0]), int(cursor_p1[1])), preset_p1['radius'], 2)
         pygame.draw.circle(screen, preset_p2['color'], (int(cursor_p2[0]), int(cursor_p2[1])), preset_p2['radius'], 2)
+        
         p1_status = 'CONFIRMED' if spawn_confirmed_p1 else 'Choosing'
         p2_status = 'CONFIRMED' if spawn_confirmed_p2 else 'Choosing'
         t1 = font.render(f'P1: {chosen_p1} - {p1_status}', True, (255, 255, 255))
         t2 = font.render(f'P2: {chosen_p2} - {p2_status}', True, (255, 255, 255))
         screen.blit(t1, (20, SCREEN_HEIGHT - 60))
         screen.blit(t2, (20, SCREEN_HEIGHT - 30))
-        # Back button (interactive)
+        
+        # Back button
         back_btn = pygame.Rect(12, SCREEN_HEIGHT - 60, 96, 36)
         try:
-            pygame.draw.rect(screen, (30,30,30), back_btn)
-            bt = font.render('VOLTAR', True, (200,200,200))
+            pygame.draw.rect(screen, (30, 30, 30), back_btn)
+            bt = font.render('RETURN', True, (200, 200, 200))
             screen.blit(bt, (back_btn.centerx - bt.get_width()//2, back_btn.centery - bt.get_height()//2))
-        except Exception:
-            pass
-
-        # handle mouse click for back button (poll immediate mouse state)
-        try:
-            if pygame.mouse.get_pressed()[0]:
-                mx, my = pygame.mouse.get_pos()
-                if back_btn.collidepoint(mx, my):
-                    return 'back'
         except Exception:
             pass
 
@@ -608,7 +695,15 @@ def select_classes_and_spawns(screen, clock, font, class_presets, bg_image=None)
             spawn_selecting = False
 
     # Initial random velocities sampled inside each class speed range
-    def random_velocity_for_preset(preset):
+    def random_velocity_for_preset(preset: dict) -> tuple:
+        """Generate a random velocity vector within the preset speed range.
+        
+        Args:
+            preset: Class preset dictionary containing 'speed_range' field.
+            
+        Returns:
+            Tuple of (vx, vy) velocity components.
+        """
         sr = preset.get('speed_range', (0, 0))
         speed = random.uniform(sr[0], sr[1])
         angle = random.uniform(0, 2 * math.pi)
@@ -618,10 +713,15 @@ def select_classes_and_spawns(screen, clock, font, class_presets, bg_image=None)
     vx2, vy2 = random_velocity_for_preset(preset_p2)
 
     return (chosen_p1, preset_p1, cursor_p1[0], cursor_p1[1], vx1, vy1,
-        chosen_p2, preset_p2, cursor_p2[0], cursor_p2[1], vx2, vy2)
+            chosen_p2, preset_p2, cursor_p2[0], cursor_p2[1], vx2, vy2)
 
-def run_game():
-    '''Main function that initializes and runs the game loop.'''
+
+def run_game() -> None:
+    """Main function that initializes and runs the game loop.
+    
+    Handles the overall game flow including menus, game initialization,
+    and the main game loop with event processing and frame rendering.
+    """
     pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption('ECS Pygame Ball Arena')
@@ -631,7 +731,7 @@ def run_game():
     quit_game = False
     # Load a global background image once (used in menus and passed to RenderSystem)
     bg_scaled = None
-    bg_path = os.path.join('images', 'spt_Menu', 'Background.png')
+    bg_path = os.path.join('images', 'spt_Menu', 'background.png')
     try:
         if os.path.exists(bg_path):
             bg_img = pygame.image.load(bg_path).convert()
@@ -649,8 +749,8 @@ def run_game():
             break
         if menu_choice == 'fight':
             result = select_classes_and_spawns(screen, clock, font, CLASS_PRESETS, bg_image=bg_scaled)
-            if result is None:
-                break
+            if result is None or result == 'back':
+                continue
         (chosen_p1, preset_p1, px1, py1, vx1, vy1,
          chosen_p2, preset_p2, px2, py2, vx2, vy2) = result
 
@@ -751,7 +851,7 @@ def run_game():
 
         # In-game settings button (bottom-right) with menu icon
         try:
-            icon_path = os.path.join('images', 'spt_Menu', 'Sprite_Botao_menu.png')
+            icon_path = os.path.join('images', 'spt_Menu', 'settings_button.png')
             ICON_H = 56
             btn_ent = esper.create_entity()
             btn_x = SCREEN_WIDTH - PADDING - ICON_H

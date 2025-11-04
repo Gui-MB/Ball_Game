@@ -6,7 +6,7 @@ from components import (
     Position, Velocity, Physics, Health, Damage, Renderable,
     ArenaBoundary, Rotation, OrbitalItem, Item, EquippedItem, HitboxRect,
     SpawnProtection, DamageCooldown, Player,
-        DesiredSpeed,
+    DesiredSpeed,
     # UI components
     UITransform, UIImage, UIButton, UIProgressBar, DamagePopup,
 )
@@ -19,16 +19,30 @@ SHOW_HITBOXES = True
 SHIELD_BLOCK_HALF_ANGLE_DEG = 60.0
 SHIELD_BLOCK_HALF_ANGLE_COS = math.cos(math.radians(SHIELD_BLOCK_HALF_ANGLE_DEG))
 
+
 class MovementSystem(esper.Processor):
-    '''Update entity positions using their velocities.'''
-    def process(self, dt):
+    """Update entity positions using their velocities."""
+    
+    def process(self, dt: float) -> None:
+        """Process movement for all entities with Position and Velocity.
+        
+        Args:
+            dt: Delta time in seconds since last frame.
+        """
         for ent, (pos, vel) in esper.get_components(Position, Velocity):
             pos.x += vel.vx * dt
             pos.y += vel.vy * dt
 
+
 class WallCollisionSystem(esper.Processor):
-    '''Handle collision between entities and the arena walls.'''
-    def process(self, dt):
+    """Handle collision between entities and the arena walls."""
+    
+    def process(self, dt: float) -> None:
+        """Process wall collisions for all entities.
+        
+        Args:
+            dt: Delta time in seconds since last frame.
+        """
         arena_list = esper.get_component(ArenaBoundary)
         if not arena_list:
             return
@@ -38,11 +52,8 @@ class WallCollisionSystem(esper.Processor):
             hitbox_rect = esper.try_component(ent, HitboxRect)
             
             if hitbox_rect:
-                # For rectangular hitboxes, calculate AABB bounds
                 rot_comp = esper.try_component(ent, Rotation)
                 angle = rot_comp.angle if rot_comp else 0.0
-                
-                # Calculate AABB of rotated rect
                 half_w = hitbox_rect.width / 2.0
                 half_h = hitbox_rect.height / 2.0
                 corners = [(-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h)]
@@ -104,19 +115,23 @@ class WallCollisionSystem(esper.Processor):
                     pos.y = bottom - pos.radius
                     vel.vy *= -phys.restitution
 
+
 class BallCollisionSystem(esper.Processor):
-    '''Handle physical collisions between balls and items (circle and AABB hitboxes).'''
-    def process(self, dt):
-        # Get all entities with position and physics components
+    """Handle physical collisions between balls and items (circle and AABB hitboxes)."""
+    
+    def process(self, dt: float) -> None:
+        """Process collisions between all collidable entities.
+        
+        Args:
+            dt: Delta time in seconds since last frame.
+        """
         collidable_entities = []
         for ent, (pos, phys) in esper.get_components(Position, Physics):
             collidable_entities.append((ent, pos, phys))
 
         num_entities = len(collidable_entities)
 
-        # Helper functions for rotated-rect vs circle collisions
         def circle_vs_rotated_rect(circle_x, circle_y, circle_r, rect_cx, rect_cy, rect_w, rect_h, rect_angle):
-            # Transform circle center into rect local space (rotate by -angle)
             a = math.radians(rect_angle)
             ca = math.cos(a)
             sa = math.sin(a)
@@ -138,14 +153,12 @@ class BallCollisionSystem(esper.Processor):
 
             dist = math.sqrt(dist_sq) if dist_sq > 0 else 0.0
 
-            # Normal in local space
             if dist == 0:
                 nx_local_n, ny_local_n = 1.0, 0.0
             else:
                 nx_local_n = nx_local / dist
                 ny_local_n = ny_local / dist
 
-            # Rotate normal back to world space
             nx = ca * nx_local_n - sa * ny_local_n
             ny = sa * nx_local_n + ca * ny_local_n
 
@@ -153,7 +166,6 @@ class BallCollisionSystem(esper.Processor):
             return True, nx, ny, overlap
 
         def aabb_of_rotated_rect(rect_cx, rect_cy, rect_w, rect_h, rect_angle):
-            # compute axis-aligned bounding box of rotated rect
             half_w = rect_w / 2.0
             half_h = rect_h / 2.0
             corners = [(-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h)]
@@ -169,7 +181,6 @@ class BallCollisionSystem(esper.Processor):
                 ys.append(wy)
             return min(xs), min(ys), max(xs), max(ys)
 
-        # Loop over all entity pairs
         for i in range(num_entities):
             ent1, pos1, phys1 = collidable_entities[i]
 
@@ -302,11 +313,9 @@ class BallCollisionSystem(esper.Processor):
                         else:
                             j_scalar = 0.0
 
-                        # Impulse vector
                         impulse_x = j_scalar * nx
                         impulse_y = j_scalar * ny
 
-                        # Apply impulse (if mass is zero, inv mass is zero so no change)
                         if phys1.mass > eps:
                             vel1.vx -= impulse_x * inv_m1
                             vel1.vy -= impulse_y * inv_m1
@@ -314,20 +323,11 @@ class BallCollisionSystem(esper.Processor):
                             vel2.vx += impulse_x * inv_m2
                             vel2.vy += impulse_y * inv_m2
 
-                # 4. Damage and knockback application
-                # Damage Logic:
-                # - Body vs Body: Both bodies damage each other using their body_damage stat
-                # - Item vs Item: Each item damages the OTHER item's parent using item damage
-                # - Item vs Body: Item damages the body, Body damages the item's parent (mutual damage)
-                # - All damage is reduced by the target's equipped items' damage_reduction
-                
-                # Current time for cooldown checks
                 current_time = pygame.time.get_ticks() / 1000.0
                 
                 ent1_is_item = esper.has_component(ent1, OrbitalItem) and esper.has_component(ent1, Item)
                 ent2_is_item = esper.has_component(ent2, OrbitalItem) and esper.has_component(ent2, Item)
                 
-                # Helper function to get base damage from entity
                 def get_entity_damage(ent):
                     if esper.has_component(ent, Item):
                         return esper.component_for_entity(ent, Item).damage
@@ -335,26 +335,22 @@ class BallCollisionSystem(esper.Processor):
                         return esper.component_for_entity(ent, Damage).body_damage
                     return 0
                 
-                # Helper function to calculate damage reduction for an entity
                 def get_damage_reduction(ent):
                     if esper.has_component(ent, EquippedItem):
                         equipped = esper.component_for_entity(ent, EquippedItem)
                         total_reduction = sum(item.damage_reduction for item in equipped.items)
-                        return min(1.0, total_reduction)  # Cap at 100% reduction
+                        return min(1.0, total_reduction)
                     return 0.0
                 
-                # Helper function to get player name for logging
                 def get_player_name(ent):
                     if esper.has_component(ent, Player):
                         player_id = esper.component_for_entity(ent, Player).player_id
                         return f"Player {player_id}"
                     return f"Entity {ent}"
 
-                # Helper: get a human readable damage source description
                 def get_damage_source_desc(attacker_ent):
                     if attacker_ent is None:
                         return "Unknown source"
-                    # If the attacker is an item, include item name and owner
                     if esper.has_component(attacker_ent, Item):
                         item_c = esper.component_for_entity(attacker_ent, Item)
                         orbital_c = esper.try_component(attacker_ent, OrbitalItem)
@@ -364,13 +360,11 @@ class BallCollisionSystem(esper.Processor):
                     # If attacker is a body with Damage component
                     if esper.has_component(attacker_ent, Damage):
                         return f"{get_player_name(attacker_ent)}'s body"
-                    # Fallback
                     return get_player_name(attacker_ent)
                 
                 vel1_comp = esper.try_component(ent1, Velocity)
                 vel2_comp = esper.try_component(ent2, Velocity)
 
-                # Apply knockback for items
                 if ent1_is_item or ent2_is_item:
                     knockback_impulse = 0.0
                     if ent1_is_item:
@@ -380,25 +374,19 @@ class BallCollisionSystem(esper.Processor):
                         item2_comp = esper.component_for_entity(ent2, Item)
                         knockback_impulse += getattr(item2_comp, 'knockback_strength', 0.0)
                     
-                    # Apply additional knockback impulse (pushes entities apart along collision normal)
                     if knockback_impulse > 0 and vel1_comp and vel2_comp:
                         eps = 1e-8
                         inv_m1 = 1.0 / phys1.mass if phys1.mass > eps else 0.0
                         inv_m2 = 1.0 / phys2.mass if phys2.mass > eps else 0.0
                         knockback_x = knockback_impulse * nx
                         knockback_y = knockback_impulse * ny
-                        # ent1 gets pushed away from ent2 (negative normal direction)
                         if phys1.mass > eps:
                             vel1_comp.vx -= knockback_x * inv_m1
                             vel1_comp.vy -= knockback_y * inv_m1
-                        # ent2 gets pushed away from ent1 (positive normal direction)
                         if phys2.mass > eps:
                             vel2_comp.vx += knockback_x * inv_m2
                             vel2_comp.vy += knockback_y * inv_m2
 
-                    # Enforce fixed speed for entities that define DesiredSpeed.
-                    # This ensures balls (and any entity with DesiredSpeed) retain a
-                    # constant magnitude after collisions and knockback (ricochet).
                     def _renormalize_if_desired(e, vel_comp):
                         try:
                             ds = esper.try_component(e, DesiredSpeed)
@@ -591,9 +579,16 @@ class BallCollisionSystem(esper.Processor):
                         if cooldown_parent:
                             cooldown_parent.last_damage_time = current_time
 
+
 class HealthSystem(esper.Processor):
-    '''Check entity health and remove entities whose HP <= 0.'''
-    def process(self, dt):
+    """Check entity health and remove entities whose HP <= 0."""
+    
+    def process(self, dt: float) -> None:
+        """Process health checks and destroy dead entities.
+        
+        Args:
+            dt: Delta time in seconds since last frame.
+        """
         entities_to_destroy = []
         for ent, health in esper.get_component(Health):
             if health.current_hp <= 0:
@@ -607,9 +602,16 @@ class HealthSystem(esper.Processor):
             esper.delete_entity(ent)
             print(f'Entity {ent} has been destroyed.')
 
+
 class RotationSystem(esper.Processor):
-    '''Update entity rotation based on time.'''
-    def process(self, dt):
+    """Update entity rotation based on time."""
+    
+    def process(self, dt: float) -> None:
+        """Update rotation for all non-orbital entities.
+        
+        Args:
+            dt: Delta time in seconds since last frame.
+        """
         # Only auto-rotate entities that are not orbital items. Orbital items
         # are oriented explicitly by the OrbitalSystem to face targets.
         for ent, rot in esper.get_component(Rotation):
@@ -618,9 +620,16 @@ class RotationSystem(esper.Processor):
             rot.angle += 180 * dt
             rot.angle %= 360
 
+
 class SpawnProtectionSystem(esper.Processor):
-    '''Decrement spawn protection timers and remove the component when expired.'''
-    def process(self, dt):
+    """Decrement spawn protection timers and remove the component when expired."""
+    
+    def process(self, dt: float) -> None:
+        """Update spawn protection timers for all protected entities.
+        
+        Args:
+            dt: Delta time in seconds since last frame.
+        """
         for ent, protection in list(esper.get_component(SpawnProtection)):
             protection.time -= dt
             if protection.time <= 0:
@@ -629,9 +638,16 @@ class SpawnProtectionSystem(esper.Processor):
                 except Exception:
                     protection.time = 0
 
+
 class OrbitalSystem(esper.Processor):
-    '''Update positions of orbital items around their parent balls.'''
-    def process(self, dt):
+    """Update positions of orbital items around their parent balls."""
+    
+    def process(self, dt: float) -> None:
+        """Update orbital item positions and rotations.
+        
+        Args:
+            dt: Delta time in seconds since last frame.
+        """
         for ent, (pos, orbital) in esper.get_components(Position, OrbitalItem):
             # If parent is gone, delete the orbital item
             if not (esper.entity_exists(orbital.parent_entity) and esper.has_component(orbital.parent_entity, Position)):
@@ -699,9 +715,18 @@ class OrbitalSystem(esper.Processor):
                     # If no target, align visual rotation with orbital motion
                     rot.angle = orbital.angle
 
+
 class RenderSystem(esper.Processor):
-    '''Render entities to the screen.'''
-    def __init__(self, screen, font, bg_image=None):
+    """Render entities to the screen."""
+    
+    def __init__(self, screen: pygame.Surface, font: pygame.font.Font, bg_image: pygame.Surface = None) -> None:
+        """Initialize the render system.
+        
+        Args:
+            screen: The pygame display surface.
+            font: The pygame font for rendering text.
+            bg_image: Optional background image surface.
+        """
         super().__init__()
         self.screen = screen
         self.font = font
@@ -709,8 +734,8 @@ class RenderSystem(esper.Processor):
         # Visual scale factor for sprites (0.7 = 70% => reduce size by 30%)
         self.visual_scale = 0.7
         # Optional arena sprite: draw centered in the arena rectangle. Try
-        # to load `images/spt_Menu/Sprite_Arena.png` if present.
-        self.arena_sprite_path = os.path.join('images', 'spt_Menu', 'Sprite_Arena.png')
+        # to load `images/spt_Menu/arena_background.png` if present.
+        self.arena_sprite_path = os.path.join('images', 'spt_Menu', 'arena_background.png')
         self.arena_sprite = None
         try:
             if os.path.exists(self.arena_sprite_path):
@@ -721,14 +746,19 @@ class RenderSystem(esper.Processor):
         # provided by the caller, use it; otherwise try loading from disk.
         self.bg_image = bg_image
         if self.bg_image is None:
-            self.bg_image_path = os.path.join('images', 'spt_Menu', 'Background.png')
+            self.bg_image_path = os.path.join('images', 'spt_Menu', 'background.png')
             try:
                 if os.path.exists(self.bg_image_path):
                     self.bg_image = pygame.image.load(self.bg_image_path).convert()
             except Exception:
                 self.bg_image = None
 
-    def process(self, dt):
+    def process(self, dt: float) -> None:
+        """Render all game entities and UI to the screen.
+        
+        Args:
+            dt: Delta time in seconds since last frame.
+        """
         # Draw background (image if available, otherwise clear to black)
         if self.bg_image:
             try:
@@ -738,7 +768,7 @@ class RenderSystem(esper.Processor):
             except Exception:
                 self.screen.fill((0, 0, 0))
         else:
-            self.screen.fill((0, 0, 0)) # black
+            self.screen.fill((0, 0, 0))
 
         # Draw arena background (image if available, otherwise outline)
         arena_list = esper.get_component(ArenaBoundary)
@@ -888,21 +918,37 @@ class RenderSystem(esper.Processor):
     # NOTE: Present the frame after all rendering (UI is rendered by UISystem
     # so the flip is done there). RenderSystem does not call flip.
 
+
 class UISystem(esper.Processor):
     """Draw UI elements and handle simple UI events.
-
+    
     Use components: UITransform + UIImage to draw images. UIButton enables
     click callbacks. UIProgressBar draws a bar and can sample a target
     entity's component (e.g., Health) to compute its fraction.
     """
-    def __init__(self, screen, font):
+    
+    def __init__(self, screen: pygame.Surface, font: pygame.font.Font) -> None:
+        """Initialize the UI system.
+        
+        Args:
+            screen: The pygame display surface.
+            font: The pygame font for rendering text.
+        """
         super().__init__()
         self.screen = screen
         self.font = font
         self.image_cache = {}
         self.event_queue = []
 
-    def load(self, path):
+    def load(self, path: str) -> pygame.Surface:
+        """Load an image from disk or return cached version.
+        
+        Args:
+            path: Path to the image file.
+            
+        Returns:
+            The loaded pygame Surface, or None if loading failed.
+        """
         if path not in self.image_cache:
             try:
                 self.image_cache[path] = pygame.image.load(path).convert_alpha()
@@ -910,17 +956,37 @@ class UISystem(esper.Processor):
                 self.image_cache[path] = None
         return self.image_cache[path]
 
-    def push_event(self, event):
+    def push_event(self, event: pygame.event.EventType) -> None:
+        """Forward a pygame event to the UI system.
+        
+        Args:
+            event: The pygame event to process.
+        """
         # called from main loop to forward pygame events
         self.event_queue.append(event)
 
-    def _pos_from_transform(self, tx, w, h):
+    def _pos_from_transform(self, tx, w: int, h: int) -> tuple:
+        """Calculate screen position from UI transform.
+        
+        Args:
+            tx: The UITransform component.
+            w: Width of the element in pixels.
+            h: Height of the element in pixels.
+            
+        Returns:
+            Tuple of (x, y) screen coordinates.
+        """
         if tx.anchor == 'center':
             return int(tx.x - w/2), int(tx.y - h/2)
         # default to topleft
         return int(tx.x), int(tx.y)
 
-    def process(self, dt):
+    def process(self, dt: float) -> None:
+        """Render UI elements and process UI events.
+        
+        Args:
+            dt: Delta time in seconds since last frame.
+        """
         # First handle events (mouse clicks)
         evs = self.event_queue[:]
         self.event_queue.clear()
