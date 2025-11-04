@@ -108,14 +108,13 @@ class Rotation:
     def __init__(self, angle: float = 0.0):
         self.angle = angle
 
-
 class DesiredSpeed:
-    """Stores a target/fixed speed (magnitude) an entity should maintain.
+    '''Stores a target/fixed speed (magnitude) an entity should maintain.
 
     This is used by the collision system to renormalize velocities after
     collisions so balls keep a constant speed (ricochet behavior with fixed
     magnitude).
-    """
+    '''
     def __init__(self, speed: float = 0.0):
         self.speed = speed
 
@@ -137,48 +136,28 @@ class Renderable:
         self.image_path = image_path
         self.image = None
 
-
 # -------------------- UI Components --------------------
 class UITransform:
-    """Position and anchor for UI elements.
-
-    x,y are pixel coordinates. anchor can be 'topleft' or 'center'.
-    """
+    '''Position and anchor for UI elements.'''
     def __init__(self, x: float, y: float, anchor: str = 'topleft'):
         self.x = x
         self.y = y
         self.anchor = anchor
 
-
 class UIImage:
-    """Reference to an image to draw as a UI element.
-
-    image_path: path to the image file relative to project root
-    scale: optional (w,h) to draw image scaled
-    z: draw order (lower drawn first)
-    """
+    '''Reference to an image to draw as a UI element.'''
     def __init__(self, image_path: str, scale: tuple = None, z: int = 0):
         self.image_path = image_path
         self.scale = scale
         self.z = z
 
-
 class UIButton:
-    """Simple clickable button marker. Stores an optional callback.
-
-    callback: callable invoked when button is clicked (no args).
-    """
+    '''Simple clickable button marker. Stores an optional callback.'''
     def __init__(self, callback=None):
         self.callback = callback
 
-
 class UIProgressBar:
-    """Progress bar UI that can show a fraction (0.0-1.0).
-
-    If target_entity is provided together with component/field names, the
-    bar will sample the target's component fields each frame to compute
-    the current ratio (e.g., Health.current_hp / Health.max_hp).
-    """
+    '''Progress bar UI that can show a fraction (0.0-1.0).'''
     def __init__(self, width: int, height: int, bg_color=(80,80,80), fg_color=(0,200,0),
                  target_entity=None, target_comp_name='Health', cur_field='current_hp', max_field='max_hp', z: int = 0):
         self.width = width
@@ -191,17 +170,8 @@ class UIProgressBar:
         self.max_field = max_field
         self.z = z
 
-
 class DamagePopup:
-        """Temporary floating damage text tied to a target entity.
-
-        Fields:
-            amount: int damage amount to display
-            target_entity: entity id the popup should appear over
-            duration: total lifetime in seconds
-            time_left: remaining lifetime in seconds
-            color: RGB tuple
-        """
+        '''Temporary floating damage text tied to a target entity.'''
         def __init__(self, amount: int, target_entity, duration: float = 0.8, color=(255, 255, 255)):
                 self.amount = int(amount)
                 self.target_entity = target_entity

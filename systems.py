@@ -19,14 +19,12 @@ SHOW_HITBOXES = True
 SHIELD_BLOCK_HALF_ANGLE_DEG = 60.0
 SHIELD_BLOCK_HALF_ANGLE_COS = math.cos(math.radians(SHIELD_BLOCK_HALF_ANGLE_DEG))
 
-
 class MovementSystem(esper.Processor):
     '''Update entity positions using their velocities.'''
     def process(self, dt):
         for ent, (pos, vel) in esper.get_components(Position, Velocity):
             pos.x += vel.vx * dt
             pos.y += vel.vy * dt
-
 
 class WallCollisionSystem(esper.Processor):
     '''Handle collision between entities and the arena walls.'''
@@ -105,7 +103,6 @@ class WallCollisionSystem(esper.Processor):
                 elif pos.y + pos.radius > bottom:
                     pos.y = bottom - pos.radius
                     vel.vy *= -phys.restitution
-
 
 class BallCollisionSystem(esper.Processor):
     '''Handle physical collisions between balls and items (circle and AABB hitboxes).'''
@@ -594,7 +591,6 @@ class BallCollisionSystem(esper.Processor):
                         if cooldown_parent:
                             cooldown_parent.last_damage_time = current_time
 
-
 class HealthSystem(esper.Processor):
     '''Check entity health and remove entities whose HP <= 0.'''
     def process(self, dt):
@@ -611,7 +607,6 @@ class HealthSystem(esper.Processor):
             esper.delete_entity(ent)
             print(f'Entity {ent} has been destroyed.')
 
-
 class RotationSystem(esper.Processor):
     '''Update entity rotation based on time.'''
     def process(self, dt):
@@ -623,7 +618,6 @@ class RotationSystem(esper.Processor):
             rot.angle += 180 * dt
             rot.angle %= 360
 
-
 class SpawnProtectionSystem(esper.Processor):
     '''Decrement spawn protection timers and remove the component when expired.'''
     def process(self, dt):
@@ -634,7 +628,6 @@ class SpawnProtectionSystem(esper.Processor):
                     esper.remove_component(ent, SpawnProtection)
                 except Exception:
                     protection.time = 0
-
 
 class OrbitalSystem(esper.Processor):
     '''Update positions of orbital items around their parent balls.'''
@@ -705,7 +698,6 @@ class OrbitalSystem(esper.Processor):
                 else:
                     # If no target, align visual rotation with orbital motion
                     rot.angle = orbital.angle
-
 
 class RenderSystem(esper.Processor):
     '''Render entities to the screen.'''
@@ -895,7 +887,6 @@ class RenderSystem(esper.Processor):
 
     # NOTE: Present the frame after all rendering (UI is rendered by UISystem
     # so the flip is done there). RenderSystem does not call flip.
-
 
 class UISystem(esper.Processor):
     """Draw UI elements and handle simple UI events.

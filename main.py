@@ -18,10 +18,10 @@ ARENA_Y = (SCREEN_HEIGHT - ARENA_SIZE) // 2
 
 # Music settings
 MUSIC_VOLUME = 0.5
-MUSIC_PATH = os.path.join('Sounds', 'BardsofWyverndale.mp3')
+MUSIC_PATH = os.path.join('sounds', 'bards_of_wyverndale.mp3')
 
 def ensure_music_playing():
-    """Initialize mixer and start playing background music if available."""
+    '''Initialize mixer and start playing background music if available.'''
     try:
         if not pygame.mixer.get_init():
             pygame.mixer.init()
@@ -43,10 +43,10 @@ def stop_music():
         pass
 
 def main_menu(screen, clock, font):
-    """Display the initial main menu with header and 3 buttons.
+    '''Display the initial main menu with header and 3 buttons.
 
     Returns: 'fight' to proceed to selection, 'quit' to exit, or None
-    """
+    '''
     header_path = os.path.join('images', 'spt_Menu', 'Menu Header.png')
     header_img = None
     try:
@@ -189,7 +189,7 @@ def settings_menu(screen, clock, font):
         clock.tick(30)
 
 def credits_menu(screen, clock, font):
-    lines = ["Credits", "Dilson Simoes", "Guilherme Burkert", "\nPress ESC or click to return"]
+    lines = ['Credits', 'Dilson Simões', 'Guilherme Burkert', '\nPress ESC or click to return']
     while True:
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
@@ -211,55 +211,38 @@ def credits_menu(screen, clock, font):
             pass
         clock.tick(30)
 
-# Create a single global World and forward commonly used module-level
-# helpers to the world instance. The original code calls functions like
-# `esper.create_entity(...)`, `esper.get_components(...)`, etc. The
-# `esper` package exposes these as methods on a World instance, so we
-# create one World here and bind those names to the world's methods.
 world = None
 
 
 def reset_world():
-    """Create a fresh World instance and bind commonly used helpers
-    onto the imported `esper` module so the rest of the code can keep
-    calling `esper.create_entity`, `esper.add_component`, etc.
-    """
     global world
-    world = esper.World()
+    import time, random
 
-    esper.create_entity = world.create_entity
-    esper.delete_entity = world.delete_entity
-    esper.add_component = world.add_component
-    esper.remove_component = world.remove_component
-    esper.component_for_entity = world.component_for_entity
-    esper.try_component = world.try_component
-    esper.has_component = world.has_component
-    esper.get_component = world.get_component
-    esper.get_components = world.get_components
-    esper.add_processor = world.add_processor
-    esper.process = world.process
-    esper.entity_exists = world.entity_exists
+    # Use a unique name per match to guarantee a fresh context
+    name = f'match_{int(time.time()*1000)}_{random.randint(0,9999)}'
+    esper.switch_world(name)
+    world = name
 
 # --- Items presets ---
 ITEMS_PRESETS = {       
     'Knight Shield': {
         'name': 'Knight Shield', 'color': (0, 200, 200), 'image_path': 'images/spt_Weapons/knight_shield.png',
-        'damage': 0, 'damage_reduction': 0.4, 'orbit_radius': 60, 'angular_speed': 90,
+        'damage': 0, 'damage_reduction': 0.6,'orbit_radius': 60, 'angular_speed': 90,
         'hitbox_w': 80, 'hitbox_h': 60, 'knockback_strength': 40.0
     },
     'Knight Sword': {
         'name': 'Knight Sword', 'color': (0, 180, 80), 'image_path': 'images/spt_Weapons/knight_sword.png',
         'damage': 5, 'damage_reduction': 0.0, 'orbit_radius': 80, 'angular_speed': 90,
-        'hitbox_w': 60, 'hitbox_h': 60, 'knockback_strength': 40.0
+        'hitbox_w': 80, 'hitbox_h': 60, 'knockback_strength': 40.0
     },
     'Mage Orb': {
         'name': 'Mage Orb', 'color': (200, 0, 200), 'image_path': 'images/spt_Weapons/mage_orb.png',
-        'damage': 10, 'damage_reduction': 0.0, 'orbit_radius': 120, 'angular_speed': 300,
+        'damage': 8,'damage_reduction': 0.0, 'orbit_radius': 120, 'angular_speed': 300,
         'hitbox_w': 40, 'hitbox_h': 40, 'knockback_strength': 40.0
     },
     'Mage Staff': {
         'name': 'Mage Staff', 'color': (200, 0, 200), 'image_path': 'images/spt_Weapons/mage_staff.png',
-        'damage': 0, 'damage_reduction': 0.0, 'orbit_radius': 60, 'angular_speed': 90,
+        'damage': 1, 'damage_reduction': 0.0, 'orbit_radius': 60, 'angular_speed': 90,
         'hitbox_w': 60, 'hitbox_h': 80, 'knockback_strength': 70.0
     },
 }
@@ -267,12 +250,12 @@ ITEMS_PRESETS = {
 # --- Class presets ---
 CLASS_PRESETS = {
     'Knight': {
-        'radius': 40, 'color': (255, 0, 0), 'image_path': 'images/spt_balls/knight.png',
+        'radius': 40, 'color': (255, 0, 0), 'image_path': 'images/spt_Balls/knight.png',
         'mass': 4.0, 'restitution': 1.0, 'speed_range': (600, 650),
-        'max_hp': 200, 'body_damage': 0, 'items': ['Knight Shield', 'Knight Sword']
+        'max_hp': 220, 'body_damage': 0, 'items': ['Knight Shield', 'Knight Sword']
     },
     'Mage': {
-        'radius': 30, 'color': (0, 0, 255), 'image_path': 'images/spt_balls/mage.png',
+        'radius': 35, 'color': (0, 0, 255), 'image_path': 'images/spt_Balls/mage.png',
         'mass': 3.0, 'restitution': 1.0, 'speed_range': (500, 550),
         'max_hp': 180, 'body_damage': 0, 'items': ['Mage Orb', 'Mage Staff']
     },
@@ -309,8 +292,6 @@ def create_orbital_item(parent_ball, item_data, index, total_items):
     item = esper.create_entity()
 
     esper.add_component(item, Position(0, 0, 6))
-    # Give orbital items a velocity component so collision knockback can apply
-    esper.add_component(item, Velocity(0.0, 0.0))
     esper.add_component(item, Physics(0.1, 1.0))
     esper.add_component(item, Item(item_data['name'], item_data.get('damage', 0), item_data.get('damage_reduction', 0.0), item_data.get('speed_boost', 0.0), item_data.get('knockback_strength', 0.0)))
 
@@ -329,8 +310,6 @@ def create_ball(x, y, radius, color, mass, restitution, max_hp, body_damage, cla
 
     esper.add_component(ball, Position(x, y, radius))
     esper.add_component(ball, Velocity(vx, vy))
-    # Store the desired fixed speed for this ball so collisions can renormalize
-    # the velocity magnitude after ricochets and knockback.
     speed_mag = math.hypot(vx, vy)
     esper.add_component(ball, DesiredSpeed(speed_mag))
     esper.add_component(ball, Physics(mass, restitution))
@@ -827,9 +806,11 @@ def run_game():
         if winner == 0:
             msg = 'Draw'
         elif winner == 1:
-            msg = f'{chosen_p1} Wins!'
+            # Show which player and their chosen class
+            msg = f'Player 1 Wins! ({chosen_p1})'
         else:
-            msg = f'{chosen_p2} Wins!'
+            # Show which player and their chosen class
+            msg = f'Player 2 Wins! ({chosen_p2})'
         info = 'Press SPACE to return to class selection or ESC to quit.'
 
         showing = True
