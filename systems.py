@@ -1,10 +1,14 @@
 import esper
 import pygame
 import math
+import os
 from components import (
     Position, Velocity, Physics, Health, Damage, Renderable,
     ArenaBoundary, Rotation, OrbitalItem, Item, EquippedItem, HitboxRect,
     SpawnProtection, DamageCooldown, Player,
+        DesiredSpeed,
+    # UI components
+    UITransform, UIImage, UIButton, UIProgressBar, DamagePopup,
 )
 
 # Global debug prints (can be enabled during development)
@@ -27,7 +31,10 @@ class MovementSystem(esper.Processor):
 class WallCollisionSystem(esper.Processor):
     '''Handle collision between entities and the arena walls.'''
     def process(self, dt):
-        arena_ent, arena = esper.get_component(ArenaBoundary)[0]
+        arena_list = esper.get_component(ArenaBoundary)
+        if not arena_list:
+            return
+        arena_ent, arena = arena_list[0]
 
         for ent, (pos, vel, phys) in esper.get_components(Position, Velocity, Physics):
             hitbox_rect = esper.try_component(ent, HitboxRect)
@@ -59,34 +66,44 @@ class WallCollisionSystem(esper.Processor):
                 minx, miny = min(xs), min(ys)
                 maxx, maxy = max(xs), max(ys)
                 
-                # Collision with walls using AABB
-                if minx < 0:
-                    pos.x += (0 - minx)
+                # Collision with walls using AABB relative to arena rectangle
+                left = arena.x
+                top = arena.y
+                right = arena.x + arena.width
+                bottom = arena.y + arena.height
+
+                if minx < left:
+                    pos.x += (left - minx)
                     vel.vx *= -phys.restitution
-                elif maxx > arena.width:
-                    pos.x -= (maxx - arena.width)
+                elif maxx > right:
+                    pos.x -= (maxx - right)
                     vel.vx *= -phys.restitution
 
-                if miny < 0:
-                    pos.y += (0 - miny)
+                if miny < top:
+                    pos.y += (top - miny)
                     vel.vy *= -phys.restitution
-                elif maxy > arena.height:
-                    pos.y -= (maxy - arena.height)
+                elif maxy > bottom:
+                    pos.y -= (maxy - bottom)
                     vel.vy *= -phys.restitution
             else:
                 # For circular entities, use radius
-                if pos.x - pos.radius < 0:
-                    pos.x = pos.radius
+                left = arena.x
+                top = arena.y
+                right = arena.x + arena.width
+                bottom = arena.y + arena.height
+
+                if pos.x - pos.radius < left:
+                    pos.x = left + pos.radius
                     vel.vx *= -phys.restitution
-                elif pos.x + pos.radius > arena.width:
-                    pos.x = arena.width - pos.radius
+                elif pos.x + pos.radius > right:
+                    pos.x = right - pos.radius
                     vel.vx *= -phys.restitution
 
-                if pos.y - pos.radius < 0:
-                    pos.y = pos.radius
+                if pos.y - pos.radius < top:
+                    pos.y = top + pos.radius
                     vel.vy *= -phys.restitution
-                elif pos.y + pos.radius > arena.height:
-                    pos.y = arena.height - pos.radius
+                elif pos.y + pos.radius > bottom:
+                    pos.y = bottom - pos.radius
                     vel.vy *= -phys.restitution
 
 
@@ -382,40 +399,33 @@ class BallCollisionSystem(esper.Processor):
                             vel2_comp.vx += knockback_x * inv_m2
                             vel2_comp.vy += knockback_y * inv_m2
 
+                    # Enforce fixed speed for entities that define DesiredSpeed.
+                    # This ensures balls (and any entity with DesiredSpeed) retain a
+                    # constant magnitude after collisions and knockback (ricochet).
+                    def _renormalize_if_desired(e, vel_comp):
+                        try:
+                            ds = esper.try_component(e, DesiredSpeed)
+                        except Exception:
+                            ds = None
+                        if vel_comp and ds:
+                            mag = math.hypot(vel_comp.vx, vel_comp.vy)
+                            if mag > 1e-6:
+                                target = float(ds.speed)
+                                if target > 0:
+                                    scale = target / mag
+                                    vel_comp.vx *= scale
+                                    vel_comp.vy *= scale
+
+                    _renormalize_if_desired(ent1, vel1_comp)
+                    _renormalize_if_desired(ent2, vel2_comp)
+
                 # body vs body
+                # NOTE: Bodies do NOT inflict HP damage on each other on contact.
+                # Only item hitboxes (orbital items / weapons) apply damage when
+                # they collide with a body. Preserve physics (position/velocity)
+                # resolution above, but skip any HP modification here.
                 if not ent1_is_item and not ent2_is_item:
-                    # skip damage if either participant has spawn protection
-                    if esper.has_component(ent1, SpawnProtection) or esper.has_component(ent2, SpawnProtection):
-                        continue
-
-                    # Check damage cooldowns
-                    cooldown1 = esper.try_component(ent1, DamageCooldown)
-                    cooldown2 = esper.try_component(ent2, DamageCooldown)
-                    if cooldown1 and current_time - cooldown1.last_damage_time < cooldown1.cooldown_time:
-                        continue
-                    if cooldown2 and current_time - cooldown2.last_damage_time < cooldown2.cooldown_time:
-                        continue
-
-                    # Body vs Body: No damage reduction (shields don't help in body collisions)
-                    base_damage1 = get_entity_damage(ent1)
-                    base_damage2 = get_entity_damage(ent2)
-                    
-                    damage_to_ent1 = base_damage1
-                    damage_to_ent2 = base_damage2
-
-                    if esper.has_component(ent1, Health) and damage_to_ent2 > 0:
-                        health1 = esper.component_for_entity(ent1, Health)
-                        health1.current_hp -= damage_to_ent2
-                        print(f"{get_damage_source_desc(ent2)} dealt {damage_to_ent2} damage to {get_player_name(ent1)}")
-                        if cooldown1:
-                            cooldown1.last_damage_time = current_time
-
-                    if esper.has_component(ent2, Health) and damage_to_ent1 > 0:
-                        health2 = esper.component_for_entity(ent2, Health)
-                        health2.current_hp -= damage_to_ent1
-                        print(f"{get_damage_source_desc(ent1)} dealt {damage_to_ent1} damage to {get_player_name(ent2)}")
-                        if cooldown2:
-                            cooldown2.last_damage_time = current_time
+                    continue
 
                 # both are items -> do NOT apply damage to their parents
                 # Items colliding with each other should not directly reduce the health
@@ -519,6 +529,12 @@ class BallCollisionSystem(esper.Processor):
                         else:
                             health_body.current_hp -= damage_to_body
                             print(f"{get_damage_source_desc(item_ent)} dealt {damage_to_body} damage to {get_player_name(body_ent)}")
+                            # Create a floating damage popup tied to this body
+                            try:
+                                popup_ent = esper.create_entity()
+                                esper.add_component(popup_ent, DamagePopup(damage_to_body, body_ent, duration=0.9, color=(255, 220, 60)))
+                            except Exception:
+                                pass
                         if cooldown_body:
                             cooldown_body.last_damage_time = current_time
 
@@ -599,7 +615,11 @@ class HealthSystem(esper.Processor):
 class RotationSystem(esper.Processor):
     '''Update entity rotation based on time.'''
     def process(self, dt):
+        # Only auto-rotate entities that are not orbital items. Orbital items
+        # are oriented explicitly by the OrbitalSystem to face targets.
         for ent, rot in esper.get_component(Rotation):
+            if esper.has_component(ent, OrbitalItem):
+                continue
             rot.angle += 180 * dt
             rot.angle %= 360
 
@@ -620,35 +640,138 @@ class OrbitalSystem(esper.Processor):
     '''Update positions of orbital items around their parent balls.'''
     def process(self, dt):
         for ent, (pos, orbital) in esper.get_components(Position, OrbitalItem):
-            if esper.entity_exists(orbital.parent_entity) and esper.has_component(orbital.parent_entity, Position):
-                parent_pos = esper.component_for_entity(orbital.parent_entity, Position)
+            # If parent is gone, delete the orbital item
+            if not (esper.entity_exists(orbital.parent_entity) and esper.has_component(orbital.parent_entity, Position)):
+                try:
+                    esper.delete_entity(ent)
+                except Exception:
+                    pass
+                continue
 
-                orbital.angle += orbital.angular_speed * dt
-                orbital.angle %= 360
+            parent_pos = esper.component_for_entity(orbital.parent_entity, Position)
 
-                angle_rad = math.radians(orbital.angle)
-                pos.x = parent_pos.x + orbital.orbit_radius * math.cos(angle_rad)
-                pos.y = parent_pos.y + orbital.orbit_radius * math.sin(angle_rad)
-            else:
-                esper.delete_entity(ent)
+            # Find an enemy target to face: look for the first entity with a Player
+            # component whose player_id differs from the parent's player_id.
+            target = None
+            try:
+                parent_player = esper.try_component(orbital.parent_entity, Player)
+                parent_pid = parent_player.player_id if parent_player else None
+                for e, p in esper.get_component(Position):
+                    if e == orbital.parent_entity:
+                        continue
+                    pl = esper.try_component(e, Player)
+                    if pl and parent_pid is not None and pl.player_id != parent_pid:
+                        target = p
+                        break
+                # Fallback: if no Player found, pick nearest other entity with Health
+                if target is None:
+                    best = None
+                    best_dist = None
+                    for e, p in esper.get_component(Position):
+                        if e == orbital.parent_entity:
+                            continue
+                        if esper.has_component(e, Health):
+                            dx = p.x - parent_pos.x
+                            dy = p.y - parent_pos.y
+                            d = dx*dx + dy*dy
+                            if best_dist is None or d < best_dist:
+                                best_dist = d
+                                best = p
+                    target = best
+            except Exception:
+                target = None
 
-            # Keep the entity's Rotation in sync with its orbital angle (so image and rotated hitbox match)
+            # Advance the orbital angle so the item keeps orbiting around its parent
+            orbital.angle += orbital.angular_speed * dt
+            orbital.angle %= 360
+
+            # Compute orbital position using the orbital.angle (so item orbits)
+            angle_rad = math.radians(orbital.angle)
+            pos.x = parent_pos.x + orbital.orbit_radius * math.cos(angle_rad)
+            pos.y = parent_pos.y + orbital.orbit_radius * math.sin(angle_rad)
+
+            # Determine facing: compute angle from parent to target if available
+            facing_angle = None
+            if target is not None:
+                dx = target.x - parent_pos.x
+                dy = target.y - parent_pos.y
+                facing_angle = math.degrees(math.atan2(dy, dx))
+
+            # Update Rotation to face the enemy while the item continues to orbit.
             rot = esper.try_component(ent, Rotation)
             if rot:
-                rot.angle = orbital.angle
+                if facing_angle is not None:
+                    rot.angle = facing_angle
+                else:
+                    # If no target, align visual rotation with orbital motion
+                    rot.angle = orbital.angle
 
 
 class RenderSystem(esper.Processor):
     '''Render entities to the screen.'''
-    def __init__(self, screen, font):
+    def __init__(self, screen, font, bg_image=None):
         super().__init__()
         self.screen = screen
         self.font = font
         self.image_cache = {}  # Cache for loaded images
+        # Visual scale factor for sprites (0.7 = 70% => reduce size by 30%)
+        self.visual_scale = 0.7
+        # Optional arena sprite: draw centered in the arena rectangle. Try
+        # to load `images/spt_Menu/Sprite_Arena.png` if present.
+        self.arena_sprite_path = os.path.join('images', 'spt_Menu', 'Sprite_Arena.png')
+        self.arena_sprite = None
+        try:
+            if os.path.exists(self.arena_sprite_path):
+                self.arena_sprite = pygame.image.load(self.arena_sprite_path).convert_alpha()
+        except Exception:
+            self.arena_sprite = None
+        # Optional background image for the whole screen. If a surface is
+        # provided by the caller, use it; otherwise try loading from disk.
+        self.bg_image = bg_image
+        if self.bg_image is None:
+            self.bg_image_path = os.path.join('images', 'spt_Menu', 'Background.png')
+            try:
+                if os.path.exists(self.bg_image_path):
+                    self.bg_image = pygame.image.load(self.bg_image_path).convert()
+            except Exception:
+                self.bg_image = None
 
     def process(self, dt):
-        # Clear the screen
-        self.screen.fill((0, 0, 0)) # black
+        # Draw background (image if available, otherwise clear to black)
+        if self.bg_image:
+            try:
+                sw, sh = self.screen.get_size()
+                bg_scaled = pygame.transform.scale(self.bg_image, (sw, sh))
+                self.screen.blit(bg_scaled, (0, 0))
+            except Exception:
+                self.screen.fill((0, 0, 0))
+        else:
+            self.screen.fill((0, 0, 0)) # black
+
+        # Draw arena background (image if available, otherwise outline)
+        arena_list = esper.get_component(ArenaBoundary)
+        if arena_list:
+            _, arena = arena_list[0]
+            try:
+                if self.arena_sprite:
+                    # Scale the sprite to fit within the arena while preserving aspect ratio
+                    sw, sh = self.arena_sprite.get_size()
+                    max_w = int(arena.width)
+                    max_h = int(arena.height)
+                    scale = min(max_w / sw, max_h / sh, 1.0)
+                    draw_w = max(1, int(sw * scale))
+                    draw_h = max(1, int(sh * scale))
+                    try:
+                        sprite_scaled = pygame.transform.scale(self.arena_sprite, (draw_w, draw_h))
+                        draw_x = int(arena.x + (arena.width - draw_w) / 2)
+                        draw_y = int(arena.y + (arena.height - draw_h) / 2)
+                        self.screen.blit(sprite_scaled, (draw_x, draw_y))
+                    except Exception:
+                        pygame.draw.rect(self.screen, (30, 30, 30), pygame.Rect(int(arena.x), int(arena.y), int(arena.width), int(arena.height)), 2)
+                else:
+                    pygame.draw.rect(self.screen, (30, 30, 30), pygame.Rect(int(arena.x), int(arena.y), int(arena.width), int(arena.height)), 2)
+            except Exception:
+                pass
 
         # Draw balls (entities with Health)
         for ent, (pos, render, health) in esper.get_components(Position, Renderable, Health):
@@ -661,22 +784,20 @@ class RenderSystem(esper.Processor):
 
             image = self.image_cache.get(render.image_path)
             if image:
-                scaled_image = pygame.transform.scale(image, (pos.radius * 2, pos.radius * 2))
+                # Scale visual sprite down by visual_scale (keep physics radius unchanged)
+                draw_w = max(1, int(pos.radius * 2 * self.visual_scale))
+                draw_h = max(1, int(pos.radius * 2 * self.visual_scale))
+                scaled_image = pygame.transform.scale(image, (draw_w, draw_h))
 
-                # Check for rotation
-                rot_component = esper.try_component(ent, Rotation)
-                if rot_component:
-                    scaled_image = pygame.transform.rotate(scaled_image, rot_component.angle)
-
+                # NOTE: do not rotate the sprite image when drawing. Rotation
+                # is still used by physics/hitbox logic, but visual sprites are
+                # kept axis-aligned for a cleaner look.
                 rect = scaled_image.get_rect(center=(int(pos.x), int(pos.y)))
                 self.screen.blit(scaled_image, rect)
             else:
-                # Fallback to circle
-                pygame.draw.circle(self.screen, render.color, (int(pos.x), int(pos.y)), pos.radius)
+                # Fallback to circle (visual only scaled)
+                pygame.draw.circle(self.screen, render.color, (int(pos.x), int(pos.y)), max(1, int(pos.radius * self.visual_scale)))
 
-            # Draw the health bar (simple text for now)
-            text = self.font.render(f'HP: {health.current_hp}', True, (255, 255, 255))
-            self.screen.blit(text, (pos.x - pos.radius, pos.y - pos.radius - 15))
 
         # Draw orbital items (entities without Health)
         for ent, (pos, render) in esper.get_components(Position, Renderable):
@@ -703,21 +824,35 @@ class RenderSystem(esper.Processor):
                     w, h = int(pos.radius * 2), int(pos.radius * 2)
                     cx, cy = int(pos.x), int(pos.y)
 
-                scaled = pygame.transform.scale(image, (max(1, w), max(1, h)))
-                # Apply rotation if present so image and hitbox match
-                rot_comp = esper.try_component(ent, Rotation)
-                if rot_comp:
-                    scaled = pygame.transform.rotate(scaled, rot_comp.angle)
+                # Apply visual scale to item sprite dimensions
+                draw_w = max(1, int(w * self.visual_scale))
+                draw_h = max(1, int(h * self.visual_scale))
 
-                rect = scaled.get_rect(center=(cx, cy))
-                self.screen.blit(scaled, rect)
+                scaled = pygame.transform.scale(image, (draw_w, draw_h))
+                # Rotate orbital item sprites to face their target. Balls
+                # (entities with Health) remain axis-aligned for clarity.
+                rot_comp = esper.try_component(ent, Rotation)
+                if esper.has_component(ent, OrbitalItem) and rot_comp:
+                    try:
+                        # Pygame rotates counter-clockwise; our rotation angle
+                        # is world-space degrees where 0 points to the right, so
+                        # negate to get the correct visual orientation.
+                        rotated = pygame.transform.rotate(scaled, -rot_comp.angle)
+                        rect = rotated.get_rect(center=(cx, cy))
+                        self.screen.blit(rotated, rect)
+                    except Exception:
+                        rect = scaled.get_rect(center=(cx, cy))
+                        self.screen.blit(scaled, rect)
+                else:
+                    rect = scaled.get_rect(center=(cx, cy))
+                    self.screen.blit(scaled, rect)
             else:
                 # Fallback to drawing a rect (if hitbox) or a circle
                 if hb:
                     rect = pygame.Rect(int(pos.x + hb.offset_x - hb.width/2), int(pos.y + hb.offset_y - hb.height/2), int(hb.width), int(hb.height))
                     pygame.draw.rect(self.screen, render.color, rect)
                 else:
-                    pygame.draw.circle(self.screen, render.color, (int(pos.x), int(pos.y)), pos.radius)
+                    pygame.draw.circle(self.screen, render.color, (int(pos.x), int(pos.y)), max(1, int(pos.radius * self.visual_scale)))
         # Debug: draw hitbox outlines and shield facing vectors
         if SHOW_HITBOXES:
             for ent, (pos, hb) in esper.get_components(Position, HitboxRect):
@@ -753,10 +888,231 @@ class RenderSystem(esper.Processor):
             # Draw circular hitboxes for ball bodies (entities with Health)
             for ent_b, (pos_b, render_b, health_b) in esper.get_components(Position, Renderable, Health):
                 try:
-                    # Yellow outline for body hitboxes
-                    pygame.draw.circle(self.screen, (255, 255, 0), (int(pos_b.x), int(pos_b.y)), int(pos_b.radius), 1)
+                    # Yellow outline for body hitboxes (visual size)
+                    pygame.draw.circle(self.screen, (255, 255, 0), (int(pos_b.x), int(pos_b.y)), max(1, int(pos_b.radius * self.visual_scale)), 1)
                 except Exception:
                     pass
 
-        # Flip display
-        pygame.display.flip()
+    # NOTE: Present the frame after all rendering (UI is rendered by UISystem
+    # so the flip is done there). RenderSystem does not call flip.
+
+
+class UISystem(esper.Processor):
+    """Draw UI elements and handle simple UI events.
+
+    Use components: UITransform + UIImage to draw images. UIButton enables
+    click callbacks. UIProgressBar draws a bar and can sample a target
+    entity's component (e.g., Health) to compute its fraction.
+    """
+    def __init__(self, screen, font):
+        super().__init__()
+        self.screen = screen
+        self.font = font
+        self.image_cache = {}
+        self.event_queue = []
+
+    def load(self, path):
+        if path not in self.image_cache:
+            try:
+                self.image_cache[path] = pygame.image.load(path).convert_alpha()
+            except Exception:
+                self.image_cache[path] = None
+        return self.image_cache[path]
+
+    def push_event(self, event):
+        # called from main loop to forward pygame events
+        self.event_queue.append(event)
+
+    def _pos_from_transform(self, tx, w, h):
+        if tx.anchor == 'center':
+            return int(tx.x - w/2), int(tx.y - h/2)
+        # default to topleft
+        return int(tx.x), int(tx.y)
+
+    def process(self, dt):
+        # First handle events (mouse clicks)
+        evs = self.event_queue[:]
+        self.event_queue.clear()
+        for event in evs:
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                mx, my = event.pos
+                # check buttons (entities with UITransform + UIImage + UIButton)
+                for ent, (tx, imgc, btn) in esper.get_components(UITransform, UIImage, UIButton):
+                    surf = self.load(imgc.image_path)
+                    if surf is None:
+                        continue
+                    w, h = surf.get_size()
+                    if imgc.scale:
+                        w, h = int(imgc.scale[0]), int(imgc.scale[1])
+                    px, py = self._pos_from_transform(tx, w, h)
+                    rect = pygame.Rect(px, py, w, h)
+                    if rect.collidepoint(mx, my):
+                        try:
+                            if btn.callback:
+                                btn.callback()
+                        except Exception:
+                            pass
+
+        # Draw image-based UI elements sorted by z
+        ui_images = []
+        for ent, (tx, imgc) in esper.get_components(UITransform, UIImage):
+            ui_images.append((getattr(imgc, 'z', 0), ent, tx, imgc))
+        ui_images.sort(key=lambda t: t[0])
+        for _z, ent, tx, imgc in ui_images:
+            surf = None
+            if imgc.image_path:
+                surf = self.load(imgc.image_path)
+            if surf:
+                if imgc.scale:
+                    try:
+                        surf = pygame.transform.scale(surf, (int(imgc.scale[0]), int(imgc.scale[1])))
+                    except Exception:
+                        pass
+                px, py = self._pos_from_transform(tx, surf.get_width(), surf.get_height())
+                try:
+                    self.screen.blit(surf, (px, py))
+                except Exception:
+                    pass
+
+        # Draw progress bars (sorted by z as well)
+        bars = []
+        for ent, (tx, pb) in esper.get_components(UITransform, UIProgressBar):
+            bars.append((getattr(pb, 'z', 0), ent, tx, pb))
+        bars.sort(key=lambda t: t[0])
+        for _z, ent, tx, pb in bars:
+            # determine ratio
+            ratio = 0.0
+            if pb.target_entity is not None:
+                try:
+                    comp = esper.component_for_entity(pb.target_entity, globals().get(pb.target_comp_name))
+                    cur = getattr(comp, pb.cur_field, None)
+                    mx = getattr(comp, pb.max_field, None)
+                    if cur is not None and mx:
+                        ratio = max(0.0, min(1.0, float(cur) / float(mx)))
+                except Exception:
+                    ratio = 0.0
+            # draw background
+            px, py = self._pos_from_transform(tx, pb.width, pb.height)
+            try:
+                pygame.draw.rect(self.screen, pb.bg_color, pygame.Rect(px, py, pb.width, pb.height))
+                fg_w = int(pb.width * ratio)
+                if fg_w > 0:
+                    pygame.draw.rect(self.screen, pb.fg_color, pygame.Rect(px, py, fg_w, pb.height))
+            except Exception:
+                pass
+        # Draw damage popups (floating text tied to entities)
+        try:
+            # Collect popups grouped by target so we can stack them without overlap
+            popups = list(esper.get_component(DamagePopup))
+            groups = {}
+            for d_ent, popup in popups:
+                groups.setdefault(popup.target_entity, []).append((d_ent, popup))
+
+            screen_w, screen_h = self.screen.get_size()
+            for target, items in groups.items():
+                # Find corresponding health-bar UITransform/UIProgressBar if present
+                tx_found = None
+                pb_found = None
+                for u_ent, (utx, upb) in esper.get_components(UITransform, UIProgressBar):
+                    if upb.target_entity == target:
+                        tx_found = utx
+                        pb_found = upb
+                        break
+
+                # Precompute base positions
+                if tx_found and pb_found:
+                    base_x, base_y = self._pos_from_transform(tx_found, pb_found.width, pb_found.height)
+                    # compute current filled width to position popup over the decreasing edge
+                    try:
+                        ratio = 0.0
+                        comp = None
+                        try:
+                            comp = esper.component_for_entity(pb_found.target_entity, globals().get(pb_found.target_comp_name))
+                        except Exception:
+                            comp = None
+                        if comp is not None:
+                            cur = getattr(comp, pb_found.cur_field, None)
+                            mx = getattr(comp, pb_found.max_field, None)
+                            if cur is not None and mx:
+                                ratio = max(0.0, min(1.0, float(cur) / float(mx)))
+                        fg_w = int(pb_found.width * ratio)
+                    except Exception:
+                        fg_w = int(pb_found.width / 2)
+                    edge_x = base_x + max(2, min(pb_found.width - 2, fg_w))
+                    default_px = edge_x
+                    default_py = base_y - 8
+                else:
+                    pos_comp = esper.try_component(target, Position)
+                    if pos_comp:
+                        default_px = int(pos_comp.x)
+                        default_py = int(pos_comp.y - getattr(pos_comp, 'radius', 0) - 8)
+                    else:
+                        default_px = None
+                        default_py = None
+
+                # Render stacked popups: newest first (items list order). Use index to offset vertically
+                for idx, (d_ent, popup) in enumerate(items):
+                    try:
+                        if default_px is None:
+                            # no position info, just remove popup
+                            popup.time_left = 0
+                            try:
+                                esper.delete_entity(d_ent)
+                            except Exception:
+                                pass
+                            continue
+
+                        # Compute rise offset according to popup lifetime
+                        progress = 1.0 - (popup.time_left / popup.duration) if popup.duration > 0 else 1.0
+                        rise = int(-20 * progress)
+
+                        # Stacking offset (stack upwards without overlapping)
+                        font_h = self.font.get_height()
+                        stack_offset = idx * (font_h + 4)
+
+                        px = default_px
+                        py = default_py + rise - stack_offset
+
+                        # If the popup would be off the top of the window, place it below the bar instead
+                        if py < 4 and tx_found and pb_found:
+                            py = base_y + pb_found.height + 6 + stack_offset
+
+                        # Clamp horizontally inside screen
+                        # render text (without a leading minus, show positive number)
+                        txt = f"{popup.amount}" if popup.amount >= 0 else f"{popup.amount}"
+                        surf = self.font.render(txt, True, popup.color)
+                        try:
+                            alpha = max(0, min(255, int(255 * (popup.time_left / popup.duration)))) if popup.duration > 0 else 255
+                            surf.set_alpha(alpha)
+                        except Exception:
+                            pass
+                        rect = surf.get_rect(center=(int(px), int(py)))
+                        # clamp rect inside screen horizontally
+                        if rect.left < 4:
+                            rect.left = 4
+                        if rect.right > screen_w - 4:
+                            rect.right = screen_w - 4
+                        self.screen.blit(surf, rect)
+
+                        # Countdown and removal
+                        popup.time_left -= dt
+                        if popup.time_left <= 0:
+                            try:
+                                esper.delete_entity(d_ent)
+                            except Exception:
+                                pass
+                    except Exception:
+                        try:
+                            popup.time_left -= dt
+                            if popup.time_left <= 0:
+                                esper.delete_entity(d_ent)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
+
+        # Present frame after UI rendering
+        try:
+            pygame.display.flip()
+        except Exception:
+            pass
