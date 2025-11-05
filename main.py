@@ -20,6 +20,25 @@ ARENA_Y = (SCREEN_HEIGHT - ARENA_SIZE) // 2
 MUSIC_VOLUME = 0.5
 MUSIC_PATH = os.path.join('sounds', 'bards_of_wyverndale.mp3')
 
+# Display settings
+FULLSCREEN = False
+
+
+def apply_display_mode(fullscreen: bool) -> pygame.Surface:
+    """Apply windowed or fullscreen mode and return the new display surface.
+    Uses SCALED for pixel-perfect scaling at desktop resolutions.
+    """
+    flags = 0
+    size = (SCREEN_WIDTH, SCREEN_HEIGHT)
+    if fullscreen:
+        flags = pygame.FULLSCREEN | pygame.SCALED
+    try:
+        surface = pygame.display.set_mode(size, flags)
+    except Exception:
+        # Fallback to windowed if fullscreen fails
+        surface = pygame.display.set_mode(size)
+    return surface
+
 
 # --- UI helpers ---
 def wrap_text(font: pygame.font.Font, text: str, max_width: int) -> list:
@@ -297,7 +316,11 @@ def main_menu(screen: pygame.Surface, clock: pygame.time.Clock, font: pygame.fon
                     if selected_idx == 0:
                         return 'fight'
                     if selected_idx == 1:
-                        settings_menu(screen, clock, font)
+                        res = settings_menu(screen, clock, font)
+                        if res == 'quit':
+                            return 'quit'
+                        if isinstance(res, tuple) and res[0] == 'back':
+                            screen = res[1]
                     if selected_idx == 2:
                         credits_menu(screen, clock, font)
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
@@ -305,7 +328,11 @@ def main_menu(screen: pygame.Surface, clock: pygame.time.Clock, font: pygame.fon
                 if fight_rect.collidepoint(mx, my):
                     return 'fight'
                 if settings_rect.collidepoint(mx, my):
-                    settings_menu(screen, clock, font)
+                    res = settings_menu(screen, clock, font)
+                    if res == 'quit':
+                        return 'quit'
+                    if isinstance(res, tuple) and res[0] == 'back':
+                        screen = res[1]
                 if credits_rect.collidepoint(mx, my):
                     credits_menu(screen, clock, font)
 
@@ -340,7 +367,7 @@ def main_menu(screen: pygame.Surface, clock: pygame.time.Clock, font: pygame.fon
         clock.tick(30)
 
 
-def settings_menu(screen: pygame.Surface, clock: pygame.time.Clock, font: pygame.font.Font) -> str:
+def settings_menu(screen: pygame.Surface, clock: pygame.time.Clock, font: pygame.font.Font):
     """Display the settings menu with a music volume slider.
     
     Args:
@@ -357,6 +384,8 @@ def settings_menu(screen: pygame.Surface, clock: pygame.time.Clock, font: pygame
     slider_x = SCREEN_WIDTH//2 - slider_w//2
     slider_y = SCREEN_HEIGHT//2
 
+    # Fullscreen toggle button
+    fs_rect = pygame.Rect(SCREEN_WIDTH//2 - 140, slider_y + 28, 280, 36)
     back_rect = pygame.Rect(SCREEN_WIDTH//2 - 80, slider_y + 80, 160, 44)
 
     dragging = False
@@ -366,13 +395,20 @@ def settings_menu(screen: pygame.Surface, clock: pygame.time.Clock, font: pygame
                 return 'quit'
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
-                    return 'back'
+                    return ('back', pygame.display.get_surface())
+                if event.key == pygame.K_f:
+                    # Keyboard toggle fullscreen
+                    globals()['FULLSCREEN'] = not globals()['FULLSCREEN']
+                    screen = apply_display_mode(globals()['FULLSCREEN'])
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 mx, my = event.pos
                 if pygame.Rect(slider_x, slider_y - 10, slider_w, slider_h+20).collidepoint(mx, my):
                     dragging = True
                 if back_rect.collidepoint(mx, my):
-                    return 'back'
+                    return ('back', pygame.display.get_surface())
+                if fs_rect.collidepoint(mx, my):
+                    globals()['FULLSCREEN'] = not globals()['FULLSCREEN']
+                    screen = apply_display_mode(globals()['FULLSCREEN'])
             if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 dragging = False
 
@@ -388,8 +424,10 @@ def settings_menu(screen: pygame.Surface, clock: pygame.time.Clock, font: pygame
 
         try:
             screen.fill((14, 14, 20))
-            title = font.render('Settings - Music Volume', True, (220, 220, 220))
-            screen.blit(title, (SCREEN_WIDTH//2 - title.get_width()//2, slider_y - 80))
+            title = font.render('Settings', True, (220, 220, 220))
+            screen.blit(title, (SCREEN_WIDTH//2 - title.get_width()//2, slider_y - 100))
+            subtitle = font.render('Music Volume', True, (200, 200, 200))
+            screen.blit(subtitle, (SCREEN_WIDTH//2 - subtitle.get_width()//2, slider_y - 72))
 
             pygame.draw.rect(screen, (80, 80, 80), (slider_x, slider_y, slider_w, slider_h))
             filled = int(MUSIC_VOLUME * slider_w)
@@ -399,6 +437,17 @@ def settings_menu(screen: pygame.Surface, clock: pygame.time.Clock, font: pygame
 
             vol_txt = font.render(f'Volume: {int(MUSIC_VOLUME*100)}%', True, (200, 200, 200))
             screen.blit(vol_txt, (SCREEN_WIDTH//2 - vol_txt.get_width()//2, slider_y + 28))
+
+            # Fullscreen toggle UI
+            fs_on = FULLSCREEN
+            fs_color = (60, 120, 200) if fs_on else (80, 80, 80)
+            try:
+                pygame.draw.rect(screen, (30, 30, 30), fs_rect)
+                pygame.draw.rect(screen, fs_color, fs_rect, 2)
+                fs_txt = font.render(f'Fullscreen: {"ON" if fs_on else "OFF"}  (F)', True, (200, 200, 200))
+                screen.blit(fs_txt, (fs_rect.centerx - fs_txt.get_width()//2, fs_rect.centery - fs_txt.get_height()//2))
+            except Exception:
+                pass
 
             pygame.draw.rect(screen, (40, 40, 40), back_rect)
             pygame.draw.rect(screen, (200, 200, 200), back_rect, 2)
@@ -1171,7 +1220,7 @@ def run_game() -> None:
     and the main game loop with event processing and frame rendering.
     """
     pygame.init()
-    screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+    screen = apply_display_mode(FULLSCREEN)
     pygame.display.set_caption('ECS Pygame Ball Arena')
     clock = pygame.time.Clock()
     font = pygame.font.Font(None, 24)
@@ -1193,6 +1242,11 @@ def run_game() -> None:
 
     while not quit_game:
         menu_choice = main_menu(screen, clock, font)
+        # Ensure local screen references the current display surface (in case settings toggled it)
+        try:
+            screen = pygame.display.get_surface() or screen
+        except Exception:
+            pass
         if menu_choice is None or menu_choice == 'quit':
             break
         if menu_choice == 'fight':
@@ -1324,7 +1378,18 @@ def run_game() -> None:
             esper.add_component(btn_ent, UIImage(icon_path, scale=(ICON_H, ICON_H), z=200))
             # callback opens settings menu (blocks until closed)
             def _open_settings():
-                settings_menu(screen, clock, font)
+                nonlocal screen
+                res = settings_menu(screen, clock, font)
+                try:
+                    # Always refresh screen from current display
+                    new_screen = pygame.display.get_surface()
+                    if new_screen is not None:
+                        screen = new_screen
+                        # update systems to new screen
+                        render_sys.screen = screen
+                        ui_system.screen = screen
+                except Exception:
+                    pass
             esper.add_component(btn_ent, UIButton(_open_settings))
         except Exception:
             pass
