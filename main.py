@@ -3,8 +3,8 @@ import os
 import esper
 import random
 import math
-from components import Position, Velocity, Physics, Health, Damage, Renderable, ArenaBoundary, Class, Player, EquippedItem, Rotation, Item, OrbitalItem, HitboxRect, SpawnProtection, DamageCooldown, UITransform, UIProgressBar, UIImage, UIButton, DesiredSpeed
-from systems import MovementSystem, WallCollisionSystem, BallCollisionSystem, HealthSystem, RotationSystem, OrbitalSystem, SpawnProtectionSystem, RenderSystem, UISystem
+from components import Position, Velocity, Physics, Health, Damage, Renderable, ArenaBoundary, Class, Player, EquippedItem, Rotation, Item, OrbitalItem, HitboxRect, SpawnProtection, DamageCooldown, UITransform, UIProgressBar, UIImage, UIButton, DesiredSpeed, Mana, Skill, SkillSlots, SkillEffect
+from systems import MovementSystem, WallCollisionSystem, BallCollisionSystem, HealthSystem, RotationSystem, OrbitalSystem, SpawnProtectionSystem, RenderSystem, UISystem, ManaSystem, SkillSystem
 
 # --- Game configuration ---
 SCREEN_WIDTH = 960
@@ -19,6 +19,216 @@ ARENA_Y = (SCREEN_HEIGHT - ARENA_SIZE) // 2
 # Music settings
 MUSIC_VOLUME = 0.5
 MUSIC_PATH = os.path.join('sounds', 'bards_of_wyverndale.mp3')
+
+
+# --- UI helpers ---
+def wrap_text(font: pygame.font.Font, text: str, max_width: int) -> list:
+    """Word-wrap text to a list of lines that fit within max_width.
+    Respects explicit line breaks (\n) as paragraph separators.
+    """
+    if not text:
+        return []
+    lines = []
+    paragraphs = text.split('\n')
+    for p_idx, para in enumerate(paragraphs):
+        words = para.split()
+        cur = ''
+        for w in words:
+            test = f"{cur} {w}".strip()
+            if font.size(test)[0] <= max_width or not cur:
+                cur = test
+            else:
+                lines.append(cur)
+                cur = w
+        if cur:
+            lines.append(cur)
+        # add a blank spacer between paragraphs except after last
+        if p_idx < len(paragraphs) - 1:
+            lines.append('')
+    return lines
+
+
+def draw_text_box(
+    screen: pygame.Surface,
+    font: pygame.font.Font,
+    title: str,
+    text: str,
+    rect: pygame.Rect,
+    fg=(220, 220, 220),
+    border=(60, 60, 60),
+    fill=(20, 20, 24),
+    *,
+    accent: tuple | None = None,
+    icon_color: tuple | None = None,
+    title_font: pygame.font.Font | None = None,
+    body_font: pygame.font.Font | None = None,
+    border_radius: int = 8,
+    shadow: bool = True,
+) -> None:
+    """Draw a rounded, shadowed info panel with optional accent bar and icon.
+
+    - accent: draws a thin top bar using this color
+    - icon_color: draws a small colored circle next to the title
+    - title/body fonts default to derived sizes from `font`
+    - respects newlines in text via wrap_text
+    """
+    try:
+        # Derive fonts if not provided
+        base_h = max(1, font.get_height())
+        if title_font is None:
+            title_font = pygame.font.Font(None, max(18, int(base_h * 1.1)))
+        if body_font is None:
+            body_font = pygame.font.Font(None, base_h)
+
+        # Shadow
+        if shadow:
+            shadow_rect = pygame.Rect(rect.x + 3, rect.y + 4, rect.width, rect.height)
+            srf = pygame.Surface((shadow_rect.width, shadow_rect.height), pygame.SRCALPHA)
+            srf.fill((0, 0, 0, 110))
+            try:
+                pygame.draw.rect(srf, (0, 0, 0, 110), srf.get_rect(), border_radius=border_radius)
+            except Exception:
+                pass
+            screen.blit(srf, (shadow_rect.x, shadow_rect.y))
+
+        # Panel
+        try:
+            pygame.draw.rect(screen, fill, rect, border_radius=border_radius)
+            pygame.draw.rect(screen, border, rect, 2, border_radius=border_radius)
+        except Exception:
+            pygame.draw.rect(screen, fill, rect)
+            pygame.draw.rect(screen, border, rect, 2)
+
+        # Accent bar on top
+        if accent is not None:
+            bar_h = 4
+            bar_rect = pygame.Rect(rect.x + 2, rect.y + 2, rect.width - 4, bar_h)
+            pygame.draw.rect(screen, accent, bar_rect, border_radius=max(0, border_radius - 4))
+
+        # Title
+        x = rect.x + 10
+        y = rect.y + 8
+        if title:
+            ts = title_font.render(title, True, fg)
+            # optional colored icon
+            icon_pad = 0
+            if icon_color is not None:
+                try:
+                    pygame.draw.circle(screen, icon_color, (x + 8, y + ts.get_height() // 2), 5)
+                    icon_pad = 16
+                except Exception:
+                    icon_pad = 0
+            screen.blit(ts, (x + icon_pad, y))
+            y += ts.get_height() + 6
+
+        # Body
+        body_lines = wrap_text(body_font, text, rect.width - 20)
+        for line in body_lines:
+            ls = body_font.render(line, True, (200, 200, 200))
+            screen.blit(ls, (x, y))
+            y += ls.get_height() + 2
+    except Exception:
+        pass
+
+
+# --- Items presets ---
+ITEMS_PRESETS = {       
+    'Knight Shield': {
+        'name': 'Knight Shield', 'color': (0, 200, 200), 'image_path': 'images/spt_Weapons/knight_shield.png',
+        'damage': 0, 'damage_reduction': 0.6,'orbit_radius': 60, 'angular_speed': 90,
+        'hitbox_w': 80, 'hitbox_h': 60, 'knockback_strength': 40.0
+    },
+    'Knight Sword': {
+        'name': 'Knight Sword', 'color': (0, 180, 80), 'image_path': 'images/spt_Weapons/knight_sword.png',
+        'damage': 5, 'damage_reduction': 0.0, 'orbit_radius': 80, 'angular_speed': 90,
+        'hitbox_w': 80, 'hitbox_h': 60, 'knockback_strength': 40.0
+    },
+    'Mage Orb': {
+        'name': 'Mage Orb', 'color': (200, 0, 200), 'image_path': 'images/spt_Weapons/mage_orb.png',
+        'damage': 8,'damage_reduction': 0.0, 'orbit_radius': 120, 'angular_speed': 300,
+        'hitbox_w': 40, 'hitbox_h': 40, 'knockback_strength': 40.0
+    },
+    'Mage Staff': {
+        'name': 'Mage Staff', 'color': (200, 0, 200), 'image_path': 'images/spt_Weapons/mage_staff.png',
+        'damage': 1, 'damage_reduction': 0.0, 'orbit_radius': 60, 'angular_speed': 90,
+        'hitbox_w': 60, 'hitbox_h': 80, 'knockback_strength': 70.0
+    },
+    'Katana': {
+        'name': 'Katana', 'color': (200, 0, 200), 'image_path': 'images/spt_Weapons/samurai_katana.png',
+        'damage': 3, 'damage_reduction': 0.0, 'orbit_radius': 80, 'angular_speed': 500,
+        'hitbox_w': 100, 'hitbox_h': 60, 'knockback_strength': 40.0
+    },
+}
+
+
+# --- Class presets ---
+CLASS_PRESETS = {
+    'Knight': {
+        'radius': 40, 'color': (255, 0, 0), 'image_path': 'images/spt_Balls/knight.png',
+        'mass': 4.0, 'restitution': 1.0, 'speed_range': (600, 650),
+        'max_hp': 220, 'body_damage': 0, 'items': ['Knight Shield', 'Knight Sword'],
+        'description': 'Knight: sturdy brawler with a shield to block incoming hits and a balanced sword.'
+    },
+    'Mage': {
+        'radius': 35, 'color': (0, 0, 255), 'image_path': 'images/spt_Balls/mage.png',
+        'mass': 3.0, 'restitution': 1.0, 'speed_range': (500, 550),
+        'max_hp': 180, 'body_damage': 0, 'items': ['Mage Orb', 'Mage Staff'],
+        'description': 'Mage: fragile but dangerous. Fast orbiting orb and staff help poke from range.'
+    },
+    'Samurai': {
+        'radius': 40, 'color': (255, 165, 0), 'image_path': 'images/spt_Balls/samurai.png',
+        'mass': 10.0, 'restitution': 1.001, 'speed_range': (600, 650),
+        'max_hp': 150, 'body_damage': 0, 'items': ['Katana'],
+        'description': 'Samurai: aggressive duelist with a swift katana and heavy mass.'
+    },
+    # 'Ninja': {
+    #     'radius': 30, 'color': (0, 255, 0), 'image_path': 'images/ninja.png',
+    #     'mass': 2.5, 'restitution': 1.0, 'speed_range': (700, 750),
+    #     'max_hp': 200, 'body_damage': 0, 'items': []
+    # },
+
+    # 'Necromancer': {
+    #     'radius': 40, 'color': (255, 0, 165), 'image_path': 'images/necromancer.png',
+    #     'mass': 4.5, 'restitution': 1.0, 'speed_range': (600, 650),
+    #     'max_hp': 200, 'body_damage': 0, 'items': []
+    # },
+}
+
+
+# --- Skill Presets ---
+SKILLS_PRESETS = {
+    'Shield': Skill(
+        name='Shield',
+        mana_cost=3.0,
+        cooldown=1.0,
+        effect_type='damage_reduction',
+        effect_value=0.5,
+        effect_duration=2.0,
+        icon_color=(100, 200, 255),
+        description='Raise a protective aura that reduces incoming damage by 50% for 2s.'
+    ),
+    'Berserk': Skill(
+        name='Berserk',
+        mana_cost=4.0,
+        cooldown=1.0,
+        effect_type='damage_boost',
+        effect_value=1.5,
+        effect_duration=2.0,
+        icon_color=(255, 100, 100),
+        description='Go berserk, increasing outgoing damage by 50% for 2s.'
+    ),
+    'Heal': Skill(
+        name='Heal',
+        mana_cost=5.0,
+        cooldown=5.0,
+        effect_type='heal',
+        effect_value=10.0,
+        effect_duration=0.0,
+        icon_color=(100, 255, 100),
+        description='Restore 10 HP instantly.'
+    ),
+}
+
 
 def ensure_music_playing() -> None:
     """Initialize mixer and start playing background music if available."""
@@ -250,65 +460,13 @@ def reset_world() -> None:
     world = name
 
 
-# --- Items presets ---
-ITEMS_PRESETS = {       
-    'Knight Shield': {
-        'name': 'Knight Shield', 'color': (0, 200, 200), 'image_path': 'images/spt_Weapons/knight_shield.png',
-        'damage': 0, 'damage_reduction': 0.6,'orbit_radius': 60, 'angular_speed': 90,
-        'hitbox_w': 80, 'hitbox_h': 60, 'knockback_strength': 40.0
-    },
-    'Knight Sword': {
-        'name': 'Knight Sword', 'color': (0, 180, 80), 'image_path': 'images/spt_Weapons/knight_sword.png',
-        'damage': 5, 'damage_reduction': 0.0, 'orbit_radius': 80, 'angular_speed': 90,
-        'hitbox_w': 80, 'hitbox_h': 60, 'knockback_strength': 40.0
-    },
-    'Mage Orb': {
-        'name': 'Mage Orb', 'color': (200, 0, 200), 'image_path': 'images/spt_Weapons/mage_orb.png',
-        'damage': 8,'damage_reduction': 0.0, 'orbit_radius': 120, 'angular_speed': 300,
-        'hitbox_w': 40, 'hitbox_h': 40, 'knockback_strength': 40.0
-    },
-    'Mage Staff': {
-        'name': 'Mage Staff', 'color': (200, 0, 200), 'image_path': 'images/spt_Weapons/mage_staff.png',
-        'damage': 1, 'damage_reduction': 0.0, 'orbit_radius': 60, 'angular_speed': 90,
-        'hitbox_w': 60, 'hitbox_h': 80, 'knockback_strength': 70.0
-    },
-}
-
-# --- Class presets ---
-CLASS_PRESETS = {
-    'Knight': {
-        'radius': 40, 'color': (255, 0, 0), 'image_path': 'images/spt_Balls/knight.png',
-        'mass': 4.0, 'restitution': 1.0, 'speed_range': (600, 650),
-        'max_hp': 220, 'body_damage': 0, 'items': ['Knight Shield', 'Knight Sword']
-    },
-    'Mage': {
-        'radius': 35, 'color': (0, 0, 255), 'image_path': 'images/spt_Balls/mage.png',
-        'mass': 3.0, 'restitution': 1.0, 'speed_range': (500, 550),
-        'max_hp': 180, 'body_damage': 0, 'items': ['Mage Orb', 'Mage Staff']
-    },
-    # 'Ninja': {
-    #     'radius': 30, 'color': (0, 255, 0), 'image_path': 'images/ninja.png',
-    #     'mass': 2.5, 'restitution': 1.0, 'speed_range': (700, 750),
-    #     'max_hp': 200, 'body_damage': 5, 'items': []
-    # },
-    # 'Samurai': {
-    #     'radius': 40, 'color': (255, 165, 0), 'image_path': 'images/samurai.png',
-    #     'mass': 4.5, 'restitution': 1.0, 'speed_range': (600, 650),
-    #     'max_hp': 200, 'body_damage': 5, 'items': []
-    # },
-    # 'Necromancer': {
-    #     'radius': 40, 'color': (255, 0, 165), 'image_path': 'images/necromancer.png',
-    #     'mass': 4.5, 'restitution': 1.0, 'speed_range': (600, 650),
-    #     'max_hp': 200, 'body_damage': 5, 'items': []
-    # },
-}
-
-
 def initialize_world() -> None:
     """Register systems in the world in the desired processing order."""
     esper.add_processor(MovementSystem())
     esper.add_processor(WallCollisionSystem())
     esper.add_processor(SpawnProtectionSystem())
+    esper.add_processor(ManaSystem())
+    esper.add_processor(SkillSystem())
     esper.add_processor(BallCollisionSystem())
     esper.add_processor(HealthSystem())
     esper.add_processor(RotationSystem())
@@ -357,6 +515,7 @@ def create_ball(
     class_name: str,
     items: list,
     player_id: int,
+    skills: list = None,
     vx: float = 0.0,
     vy: float = 0.0
 ):
@@ -373,6 +532,7 @@ def create_ball(
         class_name: Class type of the ball (e.g., 'Knight', 'Mage').
         items: List of equipped item names or dictionaries.
         player_id: Player ID (1 or 2) controlling this ball.
+        skills: List of 4 Skill objects for this player.
         vx: Initial x-velocity (default 0.0).
         vy: Initial y-velocity (default 0.0).
         
@@ -393,6 +553,13 @@ def create_ball(
     esper.add_component(ball, Player(player_id))
     esper.add_component(ball, SpawnProtection())
     esper.add_component(ball, DamageCooldown())
+
+    # Add mana component (max 10 mana, 0.5 regen per second)
+    esper.add_component(ball, Mana(max_mana=10.0, regen_rate=0.5))
+    
+    # Add skills as a container
+    if skills:
+        esper.add_component(ball, SkillSlots(skills))
 
     resolved_items = []
     for it in items:
@@ -415,6 +582,250 @@ def create_ball(
         create_orbital_item(ball, item_data, i, len(resolved_items))
     
     return ball
+
+
+def select_skills(
+    screen: pygame.Surface,
+    clock: pygame.time.Clock,
+    font: pygame.font.Font,
+    bg_image: pygame.Surface = None
+):
+    """Allow each player to select 4 skills from available skill pool.
+    
+    Args:
+        screen: The pygame display surface.
+        clock: The pygame clock for frame rate control.
+        font: The pygame font for rendering text.
+        bg_image: Optional background image surface.
+        
+    Returns:
+        Tuple of (skills_p1, skills_p2) where each is a list of 4 Skill objects,
+        or 'back' if user returns to main menu.
+    """
+    skill_names = list(SKILLS_PRESETS.keys())
+    
+    # Track selected skills for each player (list of skill names or None)
+    selected_p1 = [None, None, None, None]
+    selected_p2 = [None, None, None, None]
+    
+    # Current cursor position for each player (which slot they're customizing)
+    cursor_p1 = 0
+    cursor_p2 = 0
+    
+    # Current highlighted skill in the pool for each player
+    highlight_p1 = 0
+    highlight_p2 = 0
+    
+    done_p1 = False
+    done_p2 = False
+    
+    back_btn_rect = pygame.Rect(12, SCREEN_HEIGHT - 60, 96, 36)
+    
+    selecting = True
+    while selecting:
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                return 'back'
+            
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                mx, my = event.pos
+                if back_btn_rect.collidepoint(mx, my):
+                    return 'back'
+            
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_ESCAPE:
+                    return 'back'
+                
+                # Player 1 controls (if not done)
+                if not done_p1:
+                    if event.key == pygame.K_w:
+                        cursor_p1 = (cursor_p1 - 1) % 4
+                    elif event.key == pygame.K_s:
+                        cursor_p1 = (cursor_p1 + 1) % 4
+                    elif event.key == pygame.K_a:
+                        highlight_p1 = (highlight_p1 - 1) % len(skill_names)
+                    elif event.key == pygame.K_d:
+                        highlight_p1 = (highlight_p1 + 1) % len(skill_names)
+                    elif event.key == pygame.K_e:
+                        selected_p1[cursor_p1] = skill_names[highlight_p1]
+                    elif event.key == pygame.K_SPACE:
+                        # Mark as done if all slots filled
+                        if all(s is not None for s in selected_p1):
+                            done_p1 = True
+                
+                # Player 2 controls (if not done)
+                if not done_p2:
+                    if event.key == pygame.K_UP:
+                        cursor_p2 = (cursor_p2 - 1) % 4
+                    elif event.key == pygame.K_DOWN:
+                        cursor_p2 = (cursor_p2 + 1) % 4
+                    elif event.key == pygame.K_LEFT:
+                        highlight_p2 = (highlight_p2 - 1) % len(skill_names)
+                    elif event.key == pygame.K_RIGHT:
+                        highlight_p2 = (highlight_p2 + 1) % len(skill_names)
+                    elif event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
+                        selected_p2[cursor_p2] = skill_names[highlight_p2]
+                    elif event.key == pygame.K_RSHIFT:
+                        # Mark as done if all slots filled
+                        if all(s is not None for s in selected_p2):
+                            done_p2 = True
+        
+        # Draw
+        if bg_image:
+            try:
+                screen.blit(bg_image, (0, 0))
+            except Exception:
+                screen.fill((10, 10, 10))
+        else:
+            screen.fill((10, 10, 10))
+        
+        title = font.render('Select 4 Skills (P1: WASD/E + SPACE | P2: Arrows/Enter + RShift)', True, (255, 255, 255))
+        screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 20))
+        
+        # Left side: Player 1
+        col1_x = SCREEN_WIDTH // 4
+        y_start = 80
+        p1_title = font.render('Player 1 Skills', True, (255, 200, 200))
+        screen.blit(p1_title, (col1_x - p1_title.get_width() // 2, y_start))
+        
+        y = y_start + 40
+        for i in range(4):
+            slot_text = f'Slot {i+1}: '
+            if selected_p1[i]:
+                slot_text += selected_p1[i]
+                color = (100, 255, 100) if i == cursor_p1 else (200, 200, 200)
+            else:
+                slot_text += '(empty)'
+                color = (255, 100, 100) if i == cursor_p1 else (150, 150, 150)
+            
+            if i == cursor_p1 and not done_p1:
+                color = (255, 255, 0)
+            
+            text = font.render(slot_text, True, color)
+            screen.blit(text, (col1_x - text.get_width() // 2, y))
+            y += 30
+        
+        # Available skills for P1
+        y += 20
+        avail_title = font.render('Available:', True, (200, 200, 200))
+        screen.blit(avail_title, (col1_x - avail_title.get_width() // 2, y))
+        y += 25
+        
+        for idx, skill_name in enumerate(skill_names):
+            color = (255, 255, 0) if idx == highlight_p1 and not done_p1 else (180, 180, 180)
+            text = font.render(skill_name, True, color)
+            screen.blit(text, (col1_x - text.get_width() // 2, y))
+            y += 22
+
+        # Description box for P1 highlighted skill
+        try:
+            sname = skill_names[highlight_p1]
+            sref = SKILLS_PRESETS.get(sname)
+            if sref:
+                # Build a concise meta description line
+                effect = sref.effect_type
+                if effect == 'damage_reduction':
+                    extra = f"Reduces damage by {int(sref.effect_value*100)}% for {int(sref.effect_duration)}s"
+                elif effect == 'damage_boost':
+                    extra = f"Increases damage by {int((sref.effect_value-1)*100)}% for {int(sref.effect_duration)}s"
+                elif effect == 'heal':
+                    extra = f"Heals {int(sref.effect_value)} HP instantly"
+                else:
+                    extra = effect
+                desc_text = f"Mana: {sref.mana_cost} | Cooldown: {int(sref.cooldown)}s\n{extra}.\n{getattr(sref, 'description', '')}"
+                box_w, box_h = 360, 140
+                box_rect = pygame.Rect(max(8, col1_x - box_w//2), SCREEN_HEIGHT - box_h - 12, box_w, box_h)
+                draw_text_box(screen, font, sref.name, desc_text, box_rect, accent=sref.icon_color, icon_color=sref.icon_color)
+        except Exception:
+            pass
+        
+        # Right side: Player 2
+        col2_x = 3 * SCREEN_WIDTH // 4
+        y_start = 80
+        p2_title = font.render('Player 2 Skills', True, (200, 200, 255))
+        screen.blit(p2_title, (col2_x - p2_title.get_width() // 2, y_start))
+        
+        y = y_start + 40
+        for i in range(4):
+            slot_text = f'Slot {i+1}: '
+            if selected_p2[i]:
+                slot_text += selected_p2[i]
+                color = (100, 255, 100) if i == cursor_p2 else (200, 200, 200)
+            else:
+                slot_text += '(empty)'
+                color = (255, 100, 100) if i == cursor_p2 else (150, 150, 150)
+            
+            if i == cursor_p2 and not done_p2:
+                color = (255, 255, 0)
+            
+            text = font.render(slot_text, True, color)
+            screen.blit(text, (col2_x - text.get_width() // 2, y))
+            y += 30
+        
+        # Available skills for P2
+        y += 20
+        avail_title = font.render('Available:', True, (200, 200, 200))
+        screen.blit(avail_title, (col2_x - avail_title.get_width() // 2, y))
+        y += 25
+        
+        for idx, skill_name in enumerate(skill_names):
+            color = (255, 255, 0) if idx == highlight_p2 and not done_p2 else (180, 180, 180)
+            text = font.render(skill_name, True, color)
+            screen.blit(text, (col2_x - text.get_width() // 2, y))
+            y += 22
+
+        # Description box for P2 highlighted skill
+        try:
+            sname2 = skill_names[highlight_p2]
+            sref2 = SKILLS_PRESETS.get(sname2)
+            if sref2:
+                if sref2.effect_type == 'damage_reduction':
+                    extra2 = f"Reduces damage by {int(sref2.effect_value*100)}% for {int(sref2.effect_duration)}s"
+                elif sref2.effect_type == 'damage_boost':
+                    extra2 = f"Increases damage by {int((sref2.effect_value-1)*100)}% for {int(sref2.effect_duration)}s"
+                elif sref2.effect_type == 'heal':
+                    extra2 = f"Heals {int(sref2.effect_value)} HP instantly"
+                else:
+                    extra2 = sref2.effect_type
+                desc_text2 = f"Mana: {sref2.mana_cost} | Cooldown: {int(sref2.cooldown)}s\n{extra2}.\n{getattr(sref2, 'description', '')}"
+                box_w2, box_h2 = 360, 140
+                box_rect2 = pygame.Rect(min(SCREEN_WIDTH - box_w2 - 8, col2_x - box_w2//2), SCREEN_HEIGHT - box_h2 - 12, box_w2, box_h2)
+                draw_text_box(screen, font, sref2.name, desc_text2, box_rect2, accent=sref2.icon_color, icon_color=sref2.icon_color)
+        except Exception:
+            pass
+        
+        # Status
+        p1_status = 'READY' if done_p1 else 'Selecting'
+        p2_status = 'READY' if done_p2 else 'Selecting'
+        status_text = f'P1: {p1_status}  |  P2: {p2_status}'
+        if done_p1 and done_p2:
+            status_text += ' - Press any key to proceed'
+            status_color = (100, 255, 100)
+        else:
+            status_color = (180, 180, 180)
+        
+        txt = font.render(status_text, True, status_color)
+        screen.blit(txt, (SCREEN_WIDTH // 2 - txt.get_width() // 2, SCREEN_HEIGHT // 2))
+        
+        # Back button
+        try:
+            pygame.draw.rect(screen, (30, 30, 30), back_btn_rect)
+            bt = font.render('RETURN', True, (200, 200, 200))
+            screen.blit(bt, (back_btn_rect.centerx - bt.get_width()//2, back_btn_rect.centery - bt.get_height()//2))
+        except Exception:
+            pass
+        
+        pygame.display.flip()
+        clock.tick(30)
+        
+        if done_p1 and done_p2:
+            selecting = False
+    
+    # Convert selected skill names to Skill objects
+    skills_p1 = [SKILLS_PRESETS[name] for name in selected_p1]
+    skills_p2 = [SKILLS_PRESETS[name] for name in selected_p2]
+    
+    return skills_p1, skills_p2
 
 
 def select_classes_and_spawns(
@@ -557,6 +968,43 @@ def select_classes_and_spawns(
                         screen.blit(img, (int(px - size/2), int(py - size/2)))
                     except Exception:
                         pass
+        except Exception:
+            pass
+
+        # Class descriptions for each player's current selection
+        try:
+            sel1 = menu_options[selected_idx_p1]
+            pr1 = class_presets.get(sel1, {})
+            text1 = []
+            text1.append(f"HP: {pr1.get('max_hp','?')} | Mass: {pr1.get('mass','?')}")
+            sr1 = pr1.get('speed_range', (0,0))
+            text1.append(f"Speed: {int(sr1[0])}-{int(sr1[1])} | Restitution: {pr1.get('restitution','?')}")
+            items1 = ", ".join(pr1.get('items', []))
+            if items1:
+                text1.append(f"Items: {items1}")
+            d1 = pr1.get('description', '')
+            desc1 = "\n".join(text1) + ("\n" + d1 if d1 else "")
+            box_w, box_h = 380, 160
+            lrect = pygame.Rect(max(8, (SCREEN_WIDTH//4) - box_w//2), SCREEN_HEIGHT - box_h - 70, box_w, box_h)
+            draw_text_box(screen, font, sel1, desc1, lrect, accent=pr1.get('color'))
+        except Exception:
+            pass
+
+        try:
+            sel2 = menu_options[selected_idx_p2]
+            pr2 = class_presets.get(sel2, {})
+            text2 = []
+            text2.append(f"HP: {pr2.get('max_hp','?')} | Mass: {pr2.get('mass','?')}")
+            sr2 = pr2.get('speed_range', (0,0))
+            text2.append(f"Speed: {int(sr2[0])}-{int(sr2[1])} | Restitution: {pr2.get('restitution','?')}")
+            items2 = ", ".join(pr2.get('items', []))
+            if items2:
+                text2.append(f"Items: {items2}")
+            d2 = pr2.get('description', '')
+            desc2 = "\n".join(text2) + ("\n" + d2 if d2 else "")
+            box_w2, box_h2 = 380, 160
+            rrect = pygame.Rect(min(SCREEN_WIDTH - box_w2 - 8, (3*SCREEN_WIDTH//4) - box_w2//2), SCREEN_HEIGHT - box_h2 - 70, box_w2, box_h2)
+            draw_text_box(screen, font, sel2, desc2, rrect, accent=pr2.get('color'))
         except Exception:
             pass
 
@@ -754,6 +1202,12 @@ def run_game() -> None:
         (chosen_p1, preset_p1, px1, py1, vx1, vy1,
          chosen_p2, preset_p2, px2, py2, vx2, vy2) = result
 
+        # Select skills for both players
+        skills_result = select_skills(screen, clock, font, bg_image=bg_scaled)
+        if skills_result == 'back':
+            continue
+        skills_p1, skills_p2 = skills_result
+
         # Reset and build a fresh world for this match
         reset_world()
         initialize_world()
@@ -768,7 +1222,7 @@ def run_game() -> None:
             mass=preset_p1['mass'], restitution=preset_p1['restitution'],
             max_hp=preset_p1['max_hp'], body_damage=preset_p1['body_damage'],
             class_name=chosen_p1, items=preset_p1['items'],
-            player_id=1, vx=vx1, vy=vy1
+            player_id=1, skills=skills_p1, vx=vx1, vy=vy1
         )
 
         id2 = create_ball(
@@ -777,7 +1231,7 @@ def run_game() -> None:
             mass=preset_p2['mass'], restitution=preset_p2['restitution'],
             max_hp=preset_p2['max_hp'], body_damage=preset_p2['body_damage'],
             class_name=chosen_p2, items=preset_p2['items'],
-            player_id=2, vx=vx2, vy=vy2
+            player_id=2, skills=skills_p2, vx=vx2, vy=vy2
         )
 
         # Add rendering + UI systems to this world
@@ -814,36 +1268,46 @@ def run_game() -> None:
         except Exception:
             pass
 
-        # Player 1 (top-right)
+        # Player 1 (top-left) - Health bar
         pb1 = esper.create_entity()
-        esper.add_component(pb1, UITransform(SCREEN_WIDTH - PADDING - BAR_W, PADDING, 'topleft'))
+        esper.add_component(pb1, UITransform(PADDING, PADDING, 'topleft'))
         esper.add_component(pb1, UIProgressBar(BAR_W, BAR_H, bg_color=(60,60,60), fg_color=fg1, target_entity=id1, target_comp_name='Health', cur_field='current_hp', max_field='max_hp', z=100))
 
-        # Player 1 character image to the left of the bar (larger icon)
+        # Player 1 (top-left) - Mana bar (below health)
+        mb1 = esper.create_entity()
+        esper.add_component(mb1, UITransform(PADDING, PADDING + BAR_H + 4, 'topleft'))
+        esper.add_component(mb1, UIProgressBar(BAR_W, BAR_H, bg_color=(30,30,60), fg_color=(100, 150, 255), target_entity=id1, target_comp_name='Mana', cur_field='current_mana', max_field='max_mana', z=100))
+
+        # Player 1 character image to the right of the bar (larger icon)
         try:
             img1 = esper.create_entity()
             # scale image larger than bar height (30% larger)
             img_path1 = getattr(r1, 'image_path', None)
             ICON_H1 = int(BAR_H * 1.6)
             if img_path1:
-                img_x = SCREEN_WIDTH - PADDING - BAR_W - (ICON_H1 + 12)
+                img_x = PADDING + BAR_W + 12
                 esper.add_component(img1, UITransform(img_x, PADDING - (ICON_H1 - BAR_H)//2, 'topleft'))
                 esper.add_component(img1, UIImage(img_path1, scale=(ICON_H1, ICON_H1), z=101))
         except Exception:
             pass
 
-        # Player 2 (top-left)
+        # Player 2 (top-right) - Health bar
         pb2 = esper.create_entity()
-        esper.add_component(pb2, UITransform(PADDING, PADDING, 'topleft'))
+        esper.add_component(pb2, UITransform(SCREEN_WIDTH - PADDING - BAR_W, PADDING, 'topleft'))
         esper.add_component(pb2, UIProgressBar(BAR_W, BAR_H, bg_color=(60,60,60), fg_color=fg2, target_entity=id2, target_comp_name='Health', cur_field='current_hp', max_field='max_hp', z=100))
 
-        # Player 2 character image to the right of the bar (larger icon)
+        # Player 2 (top-right) - Mana bar (below health)
+        mb2 = esper.create_entity()
+        esper.add_component(mb2, UITransform(SCREEN_WIDTH - PADDING - BAR_W, PADDING + BAR_H + 4, 'topleft'))
+        esper.add_component(mb2, UIProgressBar(BAR_W, BAR_H, bg_color=(30,30,60), fg_color=(100, 150, 255), target_entity=id2, target_comp_name='Mana', cur_field='current_mana', max_field='max_mana', z=100))
+
+        # Player 2 character image to the left of the bar (larger icon)
         try:
             img2 = esper.create_entity()
             img_path2 = getattr(r2, 'image_path', None)
             ICON_H2 = int(BAR_H * 1.6)
             if img_path2:
-                img2_x = PADDING + BAR_W + 12
+                img2_x = SCREEN_WIDTH - PADDING - BAR_W - (ICON_H2 + 12)
                 esper.add_component(img2, UITransform(img2_x, PADDING - (ICON_H2 - BAR_H)//2, 'topleft'))
                 esper.add_component(img2, UIImage(img_path2, scale=(ICON_H2, ICON_H2), z=101))
         except Exception:
@@ -868,6 +1332,7 @@ def run_game() -> None:
         # Match loop
         match_running = True
         winner = None
+        current_time = 0.0
         while match_running:
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
@@ -878,6 +1343,61 @@ def run_game() -> None:
                     match_running = False
                     quit_game = True
                     break
+                
+                # Handle skill casting
+                if event.type == pygame.KEYDOWN:
+                    # Player 1: W, A, S, D for skills 0, 1, 2, 3
+                    skill_map_p1 = {
+                        pygame.K_w: 0,
+                        pygame.K_a: 1,
+                        pygame.K_s: 2,
+                        pygame.K_d: 3,
+                    }
+                    if event.key in skill_map_p1:
+                        skill_idx = skill_map_p1[event.key]
+                        # Cast skill for player 1
+                        try:
+                            if esper.entity_exists(id1):
+                                skill_slots = esper.try_component(id1, SkillSlots)
+                                mana = esper.try_component(id1, Mana)
+                                if skill_slots and mana:
+                                    slot = skill_slots.get_slot(skill_idx)
+                                    if slot and slot.skill:
+                                        if mana.current_mana >= slot.skill.mana_cost and current_time - slot.last_cast_time >= slot.skill.cooldown:
+                                            slot.last_cast_time = current_time
+                                            mana.current_mana -= slot.skill.mana_cost
+                                            effect = SkillEffect(slot.skill.effect_type, slot.skill.effect_value, slot.skill.effect_duration)
+                                            esper.add_component(id1, effect)
+                                            print(f"Player 1 cast {slot.skill.name}!")
+                        except Exception as e:
+                            pass
+
+                    # Player 2: up, down, left, right for skills 0, 1, 2, 3
+                    skill_map_p2 = {
+                        pygame.K_UP: 0,
+                        pygame.K_DOWN: 1,
+                        pygame.K_LEFT: 2,
+                        pygame.K_RIGHT: 3,
+                    } 
+                    if event.key in skill_map_p2:
+                        skill_idx = skill_map_p2[event.key]
+                        # Cast skill for player 2
+                        try:
+                            if esper.entity_exists(id2):
+                                skill_slots = esper.try_component(id2, SkillSlots)
+                                mana = esper.try_component(id2, Mana)
+                                if skill_slots and mana:
+                                    slot = skill_slots.get_slot(skill_idx)
+                                    if slot and slot.skill:
+                                        if mana.current_mana >= slot.skill.mana_cost and current_time - slot.last_cast_time >= slot.skill.cooldown:
+                                            slot.last_cast_time = current_time
+                                            mana.current_mana -= slot.skill.mana_cost
+                                            effect = SkillEffect(slot.skill.effect_type, slot.skill.effect_value, slot.skill.effect_duration)
+                                            esper.add_component(id2, effect)
+                                            print(f"Player 2 cast {slot.skill.name}!")
+                        except Exception as e:
+                            pass
+                
                 # forward events to UI
                 try:
                     ui_system.push_event(event)
@@ -885,6 +1405,7 @@ def run_game() -> None:
                     pass
 
             dt = clock.tick(FPS) / 1000.0
+            current_time += dt
             esper.process(dt)
 
             # Check victory condition: one of the player entities was destroyed

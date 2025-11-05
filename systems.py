@@ -9,6 +9,8 @@ from components import (
     DesiredSpeed,
     # UI components
     UITransform, UIImage, UIButton, UIProgressBar, DamagePopup,
+    # Mana and skill components
+    Mana, Skill, SkillSlots, SkillEffect,
 )
 
 # Global debug prints (can be enabled during development)
@@ -341,6 +343,40 @@ class BallCollisionSystem(esper.Processor):
                         total_reduction = sum(item.damage_reduction for item in equipped.items)
                         return min(1.0, total_reduction)
                     return 0.0
+
+                # --- Skill helpers ---
+                def get_active_damage_boost_multiplier(ent):
+                    """Return outgoing damage multiplier from an active SkillEffect.
+
+                    If the entity has a SkillEffect of type 'damage_boost', use its
+                    effect_value as a multiplicative boost (>1 means increase). If no
+                    such effect is found, return 1.0.
+                    """
+                    try:
+                        eff = esper.try_component(ent, SkillEffect)
+                        if eff and getattr(eff, 'effect_type', None) == 'damage_boost' and getattr(eff, 'time_remaining', 0) > 0:
+                            val = float(getattr(eff, 'effect_value', 1.0))
+                            # Guard against non-sensical values
+                            return max(0.0, val)
+                    except Exception:
+                        pass
+                    return 1.0
+
+                def get_active_damage_reduction_ratio(ent):
+                    """Return incoming damage reduction ratio from active SkillEffect.
+
+                    If the entity has a SkillEffect of type 'damage_reduction', treat
+                    effect_value as a ratio in [0..1], where 0.5 means reduce damage by 50%.
+                    """
+                    try:
+                        eff = esper.try_component(ent, SkillEffect)
+                        if eff and getattr(eff, 'effect_type', None) == 'damage_reduction' and getattr(eff, 'time_remaining', 0) > 0:
+                            val = float(getattr(eff, 'effect_value', 0.0))
+                            # Clamp to [0,1]
+                            return max(0.0, min(1.0, val))
+                    except Exception:
+                        pass
+                    return 0.0
                 
                 def get_player_name(ent):
                     if esper.has_component(ent, Player):
@@ -476,8 +512,14 @@ class BallCollisionSystem(esper.Processor):
                     # reductions should only apply if the specific item (e.g., a shield)
                     # was involved in the collision. Since the item is the collider, the
                     # body's equipped items do not automatically reduce this hit.
-                    item_damage = item_comp.damage
-                    damage_to_body = int(item_damage)
+                    # Base damage from item
+                    item_damage = float(item_comp.damage)
+                    # Apply attacker (item owner's) damage boost, if any
+                    attacker_boost = 1.0
+                    if parent_ent and esper.entity_exists(parent_ent):
+                        attacker_boost = get_active_damage_boost_multiplier(parent_ent)
+                    boosted_item_damage = item_damage * attacker_boost
+                    damage_to_body = int(max(0, round(boosted_item_damage)))
                     
                     if esper.has_component(body_ent, Health) and damage_to_body > 0:
                         health_body = esper.component_for_entity(body_ent, Health)
@@ -505,27 +547,37 @@ class BallCollisionSystem(esper.Processor):
                             if collided_shield:
                                 intercepted_reduction = max(intercepted_reduction, getattr(shield_item, 'damage_reduction', 0.0))
 
-                        # apply interception reduction if any shield intercepted
-                        if intercepted_reduction > 0.0:
-                            reduced = int(damage_to_body * (1 - intercepted_reduction))
-                            health_body.current_hp -= reduced
-                            pct = int(intercepted_reduction * 100)
-                            print(f"{get_damage_source_desc(item_ent)} dealt {reduced} damage to {get_player_name(body_ent)} (reduced from {damage_to_body} by {pct}%)")
+                        # Combine reductions: intercepted shield(s) and defender's skill-based reduction
+                        defender_skill_reduction = get_active_damage_reduction_ratio(body_ent)
+                        total_multiplier = (1.0 - max(0.0, min(1.0, intercepted_reduction))) * (1.0 - defender_skill_reduction)
+                        final_damage = int(max(0, round(damage_to_body * total_multiplier)))
+
+                        health_body.current_hp -= final_damage
+                        # Print feedback reflecting reductions if any
+                        if final_damage != damage_to_body:
+                            reduced_from = damage_to_body
+                            # Compute overall reduction percent for display
+                            overall_reduction = 1.0 - (final_damage / reduced_from if reduced_from > 0 else 1.0)
+                            pct = int(round(overall_reduction * 100))
+                            print(f"{get_damage_source_desc(item_ent)} dealt {final_damage} damage to {get_player_name(body_ent)} (reduced from {reduced_from} by {pct}%)")
                         else:
-                            health_body.current_hp -= damage_to_body
-                            print(f"{get_damage_source_desc(item_ent)} dealt {damage_to_body} damage to {get_player_name(body_ent)}")
-                            # Create a floating damage popup tied to this body
-                            try:
-                                popup_ent = esper.create_entity()
-                                esper.add_component(popup_ent, DamagePopup(damage_to_body, body_ent, duration=0.9, color=(255, 220, 60)))
-                            except Exception:
-                                pass
+                            print(f"{get_damage_source_desc(item_ent)} dealt {final_damage} damage to {get_player_name(body_ent)}")
+                        # Create a floating damage popup tied to this body
+                        try:
+                            popup_ent = esper.create_entity()
+                            esper.add_component(popup_ent, DamagePopup(final_damage, body_ent, duration=0.9, color=(255, 220, 60)))
+                        except Exception:
+                            pass
                         if cooldown_body:
                             cooldown_body.last_damage_time = current_time
 
                     # Body damages the item's parent (mutual damage in collision)
                     # Apply reduction only from the colliding item itself (e.g., a shield)
-                    body_damage = get_entity_damage(body_ent)
+                    # Outgoing body damage (from the non-item body that was hit by the item)
+                    body_damage = float(get_entity_damage(body_ent))
+                    # Apply attacker's damage boost if present
+                    attacker2_boost = get_active_damage_boost_multiplier(body_ent)
+                    boosted_body_damage = body_damage * attacker2_boost
                     # Determine if the colliding item is actually between the parent and the attacker
                     item_block_reduction = 0.0
                     try:
@@ -565,15 +617,20 @@ class BallCollisionSystem(esper.Processor):
                     except Exception:
                         item_block_reduction = getattr(item_comp, 'damage_reduction', 0.0) if item_comp else 0.0
 
-                    damage_to_parent = int(body_damage * (1 - item_block_reduction))
+                    # Apply defender's skill reduction as well (on the item's parent taking damage)
+                    defender2_skill_reduction = get_active_damage_reduction_ratio(parent_ent) if parent_ent else 0.0
+                    total_multiplier2 = (1.0 - item_block_reduction) * (1.0 - defender2_skill_reduction)
+                    damage_to_parent = int(max(0, round(boosted_body_damage * total_multiplier2)))
                     
                     if parent_ent and esper.entity_exists(parent_ent) and esper.has_component(parent_ent, Health) and damage_to_parent > 0:
                         parent_health = esper.component_for_entity(parent_ent, Health)
                         parent_health.current_hp -= damage_to_parent
-                        # If the item's shield reduced the damage, print both original and reduced values
-                        if item_block_reduction and item_block_reduction > 0.0:
-                            pct = int(item_block_reduction * 100)
-                            print(f"{get_damage_source_desc(body_ent)} dealt {damage_to_parent} damage to {get_player_name(parent_ent)} (reduced from {body_damage} by {pct}%)")
+                        # Feedback printing, showing combined reductions
+                        original = int(max(0, round(boosted_body_damage)))
+                        if damage_to_parent != original:
+                            overall_reduction2 = 1.0 - (damage_to_parent / original if original > 0 else 1.0)
+                            pct2 = int(round(overall_reduction2 * 100))
+                            print(f"{get_damage_source_desc(body_ent)} dealt {damage_to_parent} damage to {get_player_name(parent_ent)} (reduced from {original} by {pct2}%)")
                         else:
                             print(f"{get_damage_source_desc(body_ent)} dealt {damage_to_parent} damage to {get_player_name(parent_ent)}")
                         if cooldown_parent:
@@ -1173,3 +1230,57 @@ class UISystem(esper.Processor):
             pygame.display.flip()
         except Exception:
             pass
+
+
+class ManaSystem(esper.Processor):
+    """Regenerate mana over time for entities with a Mana component."""
+    
+    def process(self, dt: float) -> None:
+        """Process mana regeneration for all entities.
+        
+        Args:
+            dt: Delta time in seconds since last frame.
+        """
+        for ent, mana in esper.get_component(Mana):
+            mana.current_mana = min(mana.max_mana, mana.current_mana + mana.regen_rate * dt)
+
+
+class SkillSystem(esper.Processor):
+    """Handle skill effects and duration management."""
+    
+    def process(self, dt: float) -> None:
+        """Process active skill effects for all entities.
+        
+        Args:
+            dt: Delta time in seconds since last frame.
+        """
+        # Process active skill effects
+        effects_to_remove = []
+        for ent, effect in esper.get_component(SkillEffect):
+            effect.time_remaining -= dt
+            
+            # Apply effect based on type/
+            if effect.effect_type == 'damage_reduction':
+                # This effect is applied during collision, just maintain it
+                pass
+            
+            elif effect.effect_type == 'damage_boost':
+                # Multiplier applied during collision
+                pass
+            
+            elif effect.effect_type == 'heal' and effect.time_remaining < 0:
+                # Apply healing (one-time at start, so only when expired)
+                if esper.has_component(ent, Health):
+                    health = esper.component_for_entity(ent, Health)
+                    health.current_hp = min(health.max_hp, health.current_hp + int(effect.effect_value))
+
+            # Mark for removal if expired
+            if effect.time_remaining <= 0:
+                effects_to_remove.append((ent, effect))
+        
+        # Remove expired effects
+        for ent, effect in effects_to_remove:
+            try:
+                esper.remove_component(ent, SkillEffect)
+            except Exception:
+                pass

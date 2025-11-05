@@ -260,3 +260,124 @@ class DamagePopup:
         self.duration = float(duration)
         self.time_left = float(duration)
         self.color = color
+
+
+# -------------------- Mana & Skill Components --------------------
+
+class Mana:
+    """Mana pool for an entity (for casting skills).
+    
+    Attributes:
+        max_mana (float): Maximum mana capacity.
+        current_mana (float): Current mana available.
+        regen_rate (float): Mana regenerated per second.
+    """
+    
+    def __init__(self, max_mana: float, regen_rate: float = 1.0) -> None:
+        self.max_mana = max_mana
+        self.current_mana = max_mana
+        self.regen_rate = regen_rate
+
+
+class Skill:
+    """A skill definition with properties and effects.
+    
+    Attributes:
+        name (str): Display name of the skill.
+        mana_cost (float): Mana required to cast.
+        cooldown (float): Time before the skill can be cast again (seconds).
+        effect_type (str): Type of effect ('speed_boost', 'dash', 'shield', etc.).
+        effect_value (float): Magnitude of the effect.
+        effect_duration (float): How long the effect lasts (seconds).
+        icon_color (tuple): RGB color for UI display.
+        description (str): Player-facing description of what the skill does.
+    """
+    
+    def __init__(
+        self,
+        name: str,
+        mana_cost: float,
+        cooldown: float,
+        effect_type: str,
+        effect_value: float,
+        effect_duration: float = 0.0,
+        icon_color: tuple = (100, 100, 255),
+        description: str = ""
+    ) -> None:
+        self.name = name
+        self.mana_cost = mana_cost
+        self.cooldown = cooldown
+        self.effect_type = effect_type
+        self.effect_value = effect_value
+        self.effect_duration = effect_duration
+        self.icon_color = icon_color
+        self.description = description
+
+
+class SkillSlot:
+    """An equipped skill slot for an entity.
+    
+    Attributes:
+        skill (Skill): The skill object.
+        slot_index (int): Which slot this skill occupies (0-3).
+        last_cast_time (float): Timestamp of last cast (for cooldown tracking).
+    """
+    
+    def __init__(self, skill: Skill, slot_index: int) -> None:
+        self.skill = skill
+        self.slot_index = slot_index
+        self.last_cast_time = -float('inf')
+    
+    def is_available(self, current_time: float, current_mana: float) -> bool:
+        """Check if this skill can be cast.
+        
+        Args:
+            current_time: Current game time in seconds.
+            current_mana: Current mana of the caster.
+            
+        Returns:
+            True if cooldown is up and mana is sufficient.
+        """
+        time_since_last = current_time - self.last_cast_time
+        return (time_since_last >= self.skill.cooldown and 
+                current_mana >= self.skill.mana_cost)
+
+
+class SkillSlots:
+    """Container for equipped skill slots (up to 4 skills).
+    
+    Attributes:
+        slots (list): List of SkillSlot objects indexed 0-3.
+    """
+    
+    def __init__(self, skills: list = None) -> None:
+        """Initialize skill slots.
+        
+        Args:
+            skills: List of Skill objects (up to 4).
+        """
+        self.slots = [None, None, None, None]
+        if skills:
+            for i, skill in enumerate(skills[:4]):
+                self.slots[i] = SkillSlot(skill, i)
+    
+    def get_slot(self, index: int) -> SkillSlot:
+        """Get a skill slot by index."""
+        if 0 <= index < 4:
+            return self.slots[index]
+        return None
+
+
+class SkillEffect:
+    """An active skill effect on an entity.
+    
+    Attributes:
+        effect_type (str): Type of effect.
+        effect_value (float): Magnitude.
+        time_remaining (float): Duration left (seconds).
+    """
+    
+    def __init__(self, effect_type: str, effect_value: float, duration: float) -> None:
+        self.effect_type = effect_type
+        self.effect_value = effect_value
+        self.time_remaining = duration
