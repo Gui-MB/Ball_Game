@@ -4,6 +4,7 @@ import esper
 import random
 import math
 from components import Position, Velocity, Physics, Health, Damage, Renderable, ArenaBoundary, Class, Player, EquippedItem, Rotation, Item, OrbitalItem, HitboxRect, SpawnProtection, DamageCooldown, UITransform, UIProgressBar, UIImage, UIButton, DesiredSpeed, Mana, Skill, SkillSlots, SkillEffect
+import systems
 from systems import MovementSystem, WallCollisionSystem, BallCollisionSystem, HealthSystem, RotationSystem, OrbitalSystem, SpawnProtectionSystem, RenderSystem, UISystem, ManaSystem, SkillSystem
 
 # --- Game configuration ---
@@ -16,37 +17,37 @@ ARENA_SIZE = 375
 ARENA_X = (SCREEN_WIDTH - ARENA_SIZE) // 2
 ARENA_Y = (SCREEN_HEIGHT - ARENA_SIZE) // 2
 
-# Music settings
-MUSIC_VOLUME = 0.5
-MUSIC_PATH = os.path.join('sounds', 'bards_of_wyverndale.mp3')
-
-# Display settings
+# Fullscreen toggle default
 FULLSCREEN = False
 
 
 def apply_display_mode(fullscreen: bool) -> pygame.Surface:
-    """Apply windowed or fullscreen mode and return the new display surface.
-    Uses SCALED for pixel-perfect scaling at desktop resolutions.
+    """Apply and return a pygame display surface according to fullscreen flag.
+
+    Keeps the configured SCREEN_WIDTH/HEIGHT. Returns the created surface.
     """
     flags = 0
-    size = (SCREEN_WIDTH, SCREEN_HEIGHT)
-    if fullscreen:
-        flags = pygame.FULLSCREEN | pygame.SCALED
     try:
-        surface = pygame.display.set_mode(size, flags)
+        if fullscreen:
+            flags = pygame.FULLSCREEN
     except Exception:
-        # Fallback to windowed if fullscreen fails
-        surface = pygame.display.set_mode(size)
-    return surface
+        flags = 0
+
+    # Create or recreate the display surface
+    try:
+        screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), flags)
+        return screen
+    except Exception:
+        # Fallback: create a basic windowed mode
+        return pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
+
+# Music configuration
+MUSIC_VOLUME = 0.5
+MUSIC_PATH = os.path.join('Sounds', 'BardsofWyverndale.mp3')
 
 
-# --- UI helpers ---
-def wrap_text(font: pygame.font.Font, text: str, max_width: int) -> list:
-    """Word-wrap text to a list of lines that fit within max_width.
-    Respects explicit line breaks (\n) as paragraph separators.
-    """
-    if not text:
-        return []
+def wrap_text(font, text, max_width):
+    """Wrap a block of text into lines that fit within max_width using the provided font."""
     lines = []
     paragraphs = text.split('\n')
     for p_idx, para in enumerate(paragraphs):
@@ -386,7 +387,10 @@ def settings_menu(screen: pygame.Surface, clock: pygame.time.Clock, font: pygame
 
     # Fullscreen toggle button
     fs_rect = pygame.Rect(SCREEN_WIDTH//2 - 140, slider_y + 28, 280, 36)
-    back_rect = pygame.Rect(SCREEN_WIDTH//2 - 80, slider_y + 80, 160, 44)
+    # Debug toggle button (shows hitboxes)
+    debug_rect = pygame.Rect(SCREEN_WIDTH//2 - 140, slider_y + 72, 280, 36)
+    # Back button moved down to make room for debug toggle
+    back_rect = pygame.Rect(SCREEN_WIDTH//2 - 80, slider_y + 116, 160, 44)
 
     dragging = False
     while True:
@@ -400,6 +404,13 @@ def settings_menu(screen: pygame.Surface, clock: pygame.time.Clock, font: pygame
                     # Keyboard toggle fullscreen
                     globals()['FULLSCREEN'] = not globals()['FULLSCREEN']
                     screen = apply_display_mode(globals()['FULLSCREEN'])
+                if event.key == pygame.K_d:
+                    # Toggle debug hitbox display
+                    try:
+                        systems.SHOW_HITBOXES = not systems.SHOW_HITBOXES
+                        systems.DEBUG_ENABLED = systems.SHOW_HITBOXES
+                    except Exception:
+                        pass
             if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
                 mx, my = event.pos
                 if pygame.Rect(slider_x, slider_y - 10, slider_w, slider_h+20).collidepoint(mx, my):
@@ -409,6 +420,13 @@ def settings_menu(screen: pygame.Surface, clock: pygame.time.Clock, font: pygame
                 if fs_rect.collidepoint(mx, my):
                     globals()['FULLSCREEN'] = not globals()['FULLSCREEN']
                     screen = apply_display_mode(globals()['FULLSCREEN'])
+                if debug_rect.collidepoint(mx, my):
+                    try:
+                        systems.SHOW_HITBOXES = not systems.SHOW_HITBOXES
+                        systems.DEBUG_ENABLED = systems.SHOW_HITBOXES
+                        print(f"[DEBUG] Toggled SHOW_HITBOXES -> {systems.SHOW_HITBOXES}")
+                    except Exception:
+                        pass
             if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
                 dragging = False
 
@@ -446,6 +464,17 @@ def settings_menu(screen: pygame.Surface, clock: pygame.time.Clock, font: pygame
                 pygame.draw.rect(screen, fs_color, fs_rect, 2)
                 fs_txt = font.render(f'Fullscreen: {"ON" if fs_on else "OFF"}  (F)', True, (200, 200, 200))
                 screen.blit(fs_txt, (fs_rect.centerx - fs_txt.get_width()//2, fs_rect.centery - fs_txt.get_height()//2))
+            except Exception:
+                pass
+
+            # Debug toggle UI (hitboxes)
+            try:
+                dbg_on = getattr(systems, 'SHOW_HITBOXES', False)
+                dbg_color = (120, 200, 120) if dbg_on else (80, 80, 80)
+                pygame.draw.rect(screen, (30, 30, 30), debug_rect)
+                pygame.draw.rect(screen, dbg_color, debug_rect, 2)
+                dbg_txt = font.render(f'Debug Hitboxes: {"ON" if dbg_on else "OFF"}  (D)', True, (200, 200, 200))
+                screen.blit(dbg_txt, (debug_rect.centerx - dbg_txt.get_width()//2, debug_rect.centery - dbg_txt.get_height()//2))
             except Exception:
                 pass
 
@@ -680,44 +709,93 @@ def select_skills(
                 mx, my = event.pos
                 if back_btn_rect.collidepoint(mx, my):
                     return 'back'
+                # PRONTO clickable buttons for each player -- positioned under slot 4
+                col1_x = SCREEN_WIDTH // 4
+                col2_x = 3 * SCREEN_WIDTH // 4
+                PRONTO_W, PRONTO_H = 120, 36
+                # slots start at y_start + 40 and each slot is 30px high; place PRONTO below slot 4
+                y_start = 80
+                slots_top = y_start + 40
+                pronto_y = slots_top + 4 * 30 + 12
+                pronto_p1_rect = pygame.Rect(col1_x - PRONTO_W // 2, pronto_y, PRONTO_W, PRONTO_H)
+                pronto_p2_rect = pygame.Rect(col2_x - PRONTO_W // 2, pronto_y, PRONTO_W, PRONTO_H)
+
+                # P1: require all slots filled to mark done
+                if pronto_p1_rect.collidepoint(mx, my) and not done_p1:
+                    # focus PRONTO when clicked
+                    cursor_p1 = 4
+                    print('[DEBUG] PRONTO clicked P1 at', mx, my)
+                    # Mark ready even if not all slots are filled (user requested no requirement)
+                    done_p1 = True
+
+                if pronto_p2_rect.collidepoint(mx, my) and not done_p2:
+                    # focus PRONTO when clicked
+                    cursor_p2 = 4
+                    print('[DEBUG] PRONTO clicked P2 at', mx, my)
+                    # Mark ready even if not all slots are filled
+                    done_p2 = True
             
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     return 'back'
                 
                 # Player 1 controls (if not done)
+                # cursor_p1 allowed values: 0..3 -> slots, 4 -> PRONTO button
                 if not done_p1:
                     if event.key == pygame.K_w:
-                        cursor_p1 = (cursor_p1 - 1) % 4
+                        # move up through slots and onto PRONTO (wrap)
+                        cursor_p1 = (cursor_p1 - 1) % 5
                     elif event.key == pygame.K_s:
-                        cursor_p1 = (cursor_p1 + 1) % 4
+                        cursor_p1 = (cursor_p1 + 1) % 5
                     elif event.key == pygame.K_a:
-                        highlight_p1 = (highlight_p1 - 1) % len(skill_names)
+                        # change highlighted skill only when focused on a slot
+                        if cursor_p1 < 4:
+                            highlight_p1 = (highlight_p1 - 1) % len(skill_names)
                     elif event.key == pygame.K_d:
-                        highlight_p1 = (highlight_p1 + 1) % len(skill_names)
+                        if cursor_p1 < 4:
+                            highlight_p1 = (highlight_p1 + 1) % len(skill_names)
                     elif event.key == pygame.K_e:
-                        selected_p1[cursor_p1] = skill_names[highlight_p1]
-                    elif event.key == pygame.K_SPACE:
-                        # Mark as done if all slots filled
-                        if all(s is not None for s in selected_p1):
-                            done_p1 = True
+                        # assign only if on a slot
+                        if cursor_p1 < 4:
+                            selected_p1[cursor_p1] = skill_names[highlight_p1]
+                    elif event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
+                        # If PRONTO is focused, activate it (require all slots filled)
+                        # Also accept Enter if the mouse is currently over the PRONTO button.
+                        # Recompute PRONTO rect same as the drawing code.
+                        col1_x = SCREEN_WIDTH // 4
+                        PRONTO_W, PRONTO_H = 120, 36
+                        y_start_local = 80
+                        slots_top_local = y_start_local + 40
+                        pronto_y_local = slots_top_local + 4 * 30 + 12
+                        pronto_p1_rect_local = pygame.Rect(col1_x - PRONTO_W // 2, pronto_y_local, PRONTO_W, PRONTO_H)
+                        mx, my = pygame.mouse.get_pos()
+                        if cursor_p1 == 4 or pronto_p1_rect_local.collidepoint(mx, my):
+                            if all(s is not None for s in selected_p1):
+                                done_p1 = True
+                            else:
+                                # focus PRONTO so user can press Enter again after filling slots
+                                cursor_p1 = 4
                 
                 # Player 2 controls (if not done)
+                # cursor_p2 allowed values: 0..3 -> slots, 4 -> PRONTO button
                 if not done_p2:
                     if event.key == pygame.K_UP:
-                        cursor_p2 = (cursor_p2 - 1) % 4
+                        cursor_p2 = (cursor_p2 - 1) % 5
                     elif event.key == pygame.K_DOWN:
-                        cursor_p2 = (cursor_p2 + 1) % 4
+                        cursor_p2 = (cursor_p2 + 1) % 5
                     elif event.key == pygame.K_LEFT:
-                        highlight_p2 = (highlight_p2 - 1) % len(skill_names)
+                        if cursor_p2 < 4:
+                            highlight_p2 = (highlight_p2 - 1) % len(skill_names)
                     elif event.key == pygame.K_RIGHT:
-                        highlight_p2 = (highlight_p2 + 1) % len(skill_names)
+                        if cursor_p2 < 4:
+                            highlight_p2 = (highlight_p2 + 1) % len(skill_names)
                     elif event.key == pygame.K_RETURN or event.key == pygame.K_KP_ENTER:
-                        selected_p2[cursor_p2] = skill_names[highlight_p2]
-                    elif event.key == pygame.K_RSHIFT:
-                        # Mark as done if all slots filled
-                        if all(s is not None for s in selected_p2):
-                            done_p2 = True
+                        # If focused on a slot, assign; if focused on PRONTO, activate
+                        if cursor_p2 < 4:
+                            selected_p2[cursor_p2] = skill_names[highlight_p2]
+                        else:
+                            if all(s is not None for s in selected_p2):
+                                done_p2 = True
         
         # Draw
         if bg_image:
@@ -728,7 +806,7 @@ def select_skills(
         else:
             screen.fill((10, 10, 10))
         
-        title = font.render('Select 4 Skills (P1: WASD/E + SPACE | P2: Arrows/Enter + RShift)', True, (255, 255, 255))
+        title = font.render('Select 4 Skills (P1: WASD/E + SPACE | P2: Arrows/Enter + RShift) - Click PRONTO or use SPACE/RShift to finish', True, (255, 255, 255))
         screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 20))
         
         # Left side: Player 1
@@ -755,16 +833,29 @@ def select_skills(
             y += 30
         
         # Available skills for P1
-        y += 20
-        avail_title = font.render('Available:', True, (200, 200, 200))
-        screen.blit(avail_title, (col1_x - avail_title.get_width() // 2, y))
-        y += 25
-        
+        # Draw available skills as a horizontal list under the slots
+        avail_y = y + 20
+        try:
+            avail_title = font.render('Available:', True, (200, 200, 200))
+            screen.blit(avail_title, (col1_x - avail_title.get_width() // 2, avail_y))
+        except Exception:
+            pass
+        # prepare surfaces to compute total width
+        gap = 24
+        skill_surfaces = []
+        total_w = 0
         for idx, skill_name in enumerate(skill_names):
             color = (255, 255, 0) if idx == highlight_p1 and not done_p1 else (180, 180, 180)
-            text = font.render(skill_name, True, color)
-            screen.blit(text, (col1_x - text.get_width() // 2, y))
-            y += 22
+            surf = font.render(skill_name, True, color)
+            skill_surfaces.append((surf, color))
+            total_w += surf.get_width()
+        if skill_surfaces:
+            total_w += gap * (len(skill_surfaces) - 1)
+        sx = col1_x - total_w // 2
+        sy = avail_y + 28
+        for surf, color in skill_surfaces:
+            screen.blit(surf, (sx, sy))
+            sx += surf.get_width() + gap
 
         # Description box for P1 highlighted skill
         try:
@@ -812,16 +903,28 @@ def select_skills(
             y += 30
         
         # Available skills for P2
-        y += 20
-        avail_title = font.render('Available:', True, (200, 200, 200))
-        screen.blit(avail_title, (col2_x - avail_title.get_width() // 2, y))
-        y += 25
-        
+        # Draw available skills as a horizontal list under the slots for P2
+        avail_y = y + 20
+        try:
+            avail_title = font.render('Available:', True, (200, 200, 200))
+            screen.blit(avail_title, (col2_x - avail_title.get_width() // 2, avail_y))
+        except Exception:
+            pass
+        gap = 24
+        skill_surfaces2 = []
+        total_w2 = 0
         for idx, skill_name in enumerate(skill_names):
             color = (255, 255, 0) if idx == highlight_p2 and not done_p2 else (180, 180, 180)
-            text = font.render(skill_name, True, color)
-            screen.blit(text, (col2_x - text.get_width() // 2, y))
-            y += 22
+            surf = font.render(skill_name, True, color)
+            skill_surfaces2.append((surf, color))
+            total_w2 += surf.get_width()
+        if skill_surfaces2:
+            total_w2 += gap * (len(skill_surfaces2) - 1)
+        sx2 = col2_x - total_w2 // 2
+        sy2 = avail_y + 28
+        for surf, color in skill_surfaces2:
+            screen.blit(surf, (sx2, sy2))
+            sx2 += surf.get_width() + gap
 
         # Description box for P2 highlighted skill
         try:
@@ -848,7 +951,6 @@ def select_skills(
         p2_status = 'READY' if done_p2 else 'Selecting'
         status_text = f'P1: {p1_status}  |  P2: {p2_status}'
         if done_p1 and done_p2:
-            status_text += ' - Press any key to proceed'
             status_color = (100, 255, 100)
         else:
             status_color = (180, 180, 180)
@@ -861,6 +963,34 @@ def select_skills(
             pygame.draw.rect(screen, (30, 30, 30), back_btn_rect)
             bt = font.render('RETURN', True, (200, 200, 200))
             screen.blit(bt, (back_btn_rect.centerx - bt.get_width()//2, back_btn_rect.centery - bt.get_height()//2))
+        except Exception:
+            pass
+
+        # Draw PRONTO buttons for skills selection under slot 4 (clickable)
+        try:
+            col1_x = SCREEN_WIDTH // 4
+            col2_x = 3 * SCREEN_WIDTH // 4
+            PRONTO_W, PRONTO_H = 120, 36
+            y_start = 80
+            slots_top = y_start + 40
+            pronto_y = slots_top + 4 * 30 + 12
+            pronto_p1_rect = pygame.Rect(col1_x - PRONTO_W // 2, pronto_y, PRONTO_W, PRONTO_H)
+            pronto_p2_rect = pygame.Rect(col2_x - PRONTO_W // 2, pronto_y, PRONTO_W, PRONTO_H)
+            mx, my = pygame.mouse.get_pos()
+            for rect, done, is_focused in ((pronto_p1_rect, done_p1, cursor_p1 == 4), (pronto_p2_rect, done_p2, cursor_p2 == 4)):
+                hovered = rect.collidepoint(mx, my)
+                if done:
+                    color = (120, 200, 120)
+                elif is_focused:
+                    color = (255, 255, 0)
+                elif hovered:
+                    color = (180, 180, 40)
+                else:
+                    color = (200, 200, 200)
+                pygame.draw.rect(screen, (30, 30, 30), rect)
+                pygame.draw.rect(screen, color, rect, 2)
+                lbl = font.render('PRONTO', True, color)
+                screen.blit(lbl, (rect.centerx - lbl.get_width() // 2, rect.centery - lbl.get_height() // 2))
         except Exception:
             pass
         
@@ -921,10 +1051,12 @@ def select_classes_and_spawns(
                 if back_btn_rect.collidepoint(mx, my):
                     return 'back'
 
+            # Keyboard navigation and confirmation
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     return 'back'
 
+                # Player 1 Controls: W/S to move selection, E to confirm
                 if not confirmed_p1:
                     if event.key == pygame.K_w:
                         selected_idx_p1 = (selected_idx_p1 - 1) % len(menu_options)
@@ -933,6 +1065,7 @@ def select_classes_and_spawns(
                     if event.key == pygame.K_e:
                         confirmed_p1 = True
 
+                # Player 2 Controls: Up/Down to move selection, Enter to confirm
                 if not confirmed_p2:
                     if event.key == pygame.K_UP:
                         selected_idx_p2 = (selected_idx_p2 - 1) % len(menu_options)
@@ -949,7 +1082,7 @@ def select_classes_and_spawns(
                 screen.fill((10, 10, 10))
         else:
             screen.fill((10, 10, 10))
-        title = font.render('Select your class (Player 1: W/S + E)  (Player 2: Up/Down + Enter)', True, (255, 255, 255))
+        title = font.render('Select your class (Click PRONTO to confirm)', True, (255, 255, 255))
         screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 40))
 
         col1_x = SCREEN_WIDTH // 4
@@ -957,6 +1090,12 @@ def select_classes_and_spawns(
 
         p1_title = font.render('Player 1', True, (255, 200, 200))
         screen.blit(p1_title, (col1_x - p1_title.get_width() // 2, 100))
+        # Show which controls this player uses for skills/powers
+        try:
+            ctrl1 = font.render('Use: WASD', True, (200,200,200))
+            screen.blit(ctrl1, (col1_x - ctrl1.get_width() // 2, 128))
+        except Exception:
+            pass
         for i, opt in enumerate(menu_options):
             color = (255, 255, 0) if i == selected_idx_p1 and not confirmed_p1 else (200, 200, 200)
             text = font.render(opt + ('  [CONF]' if confirmed_p1 and i == selected_idx_p1 else ''), True, color)
@@ -989,6 +1128,11 @@ def select_classes_and_spawns(
 
         p2_title = font.render('Player 2', True, (200, 200, 255))
         screen.blit(p2_title, (col2_x - p2_title.get_width() // 2, 100))
+        try:
+            ctrl2 = font.render('Use: Arrow Keys', True, (200,200,200))
+            screen.blit(ctrl2, (col2_x - ctrl2.get_width() // 2, 128))
+        except Exception:
+            pass
         for i, opt in enumerate(menu_options):
             color = (255, 255, 0) if i == selected_idx_p2 and not confirmed_p2 else (200, 200, 200)
             text = font.render(opt + ('  [CONF]' if confirmed_p2 and i == selected_idx_p2 else ''), True, color)
@@ -1057,7 +1201,7 @@ def select_classes_and_spawns(
         except Exception:
             pass
 
-        info = font.render('Both players confirm to proceed to spawn selection.', True, (180, 180, 180))
+        info = font.render('Both players confirm to proceed to spawn selection. (P1: E to confirm | P2: Enter)', True, (180, 180, 180))
         screen.blit(info, (SCREEN_WIDTH // 2 - info.get_width() // 2, SCREEN_HEIGHT - 60))
 
         # Back button to return to main menu
@@ -1168,13 +1312,14 @@ def select_classes_and_spawns(
         screen.blit(info, (SCREEN_WIDTH // 2 - info.get_width() // 2, 20))
         pygame.draw.circle(screen, preset_p1['color'], (int(cursor_p1[0]), int(cursor_p1[1])), preset_p1['radius'], 2)
         pygame.draw.circle(screen, preset_p2['color'], (int(cursor_p2[0]), int(cursor_p2[1])), preset_p2['radius'], 2)
-        
+
         p1_status = 'CONFIRMED' if spawn_confirmed_p1 else 'Choosing'
         p2_status = 'CONFIRMED' if spawn_confirmed_p2 else 'Choosing'
         t1 = font.render(f'P1: {chosen_p1} - {p1_status}', True, (255, 255, 255))
         t2 = font.render(f'P2: {chosen_p2} - {p2_status}', True, (255, 255, 255))
         screen.blit(t1, (20, SCREEN_HEIGHT - 60))
         screen.blit(t2, (20, SCREEN_HEIGHT - 30))
+        # (Confirmation via keyboard: P1: E, P2: Enter)
         
         # Back button
         back_btn = pygame.Rect(12, SCREEN_HEIGHT - 60, 96, 36)
@@ -1220,6 +1365,13 @@ def run_game() -> None:
     and the main game loop with event processing and frame rendering.
     """
     pygame.init()
+    # Ensure the video/display subsystem is initialized before creating a surface.
+    try:
+        if not pygame.display.get_init():
+            pygame.display.init()
+    except Exception:
+        # If display init fails, proceed; apply_display_mode will try as well.
+        pass
     screen = apply_display_mode(FULLSCREEN)
     pygame.display.set_caption('ECS Pygame Ball Arena')
     clock = pygame.time.Clock()
