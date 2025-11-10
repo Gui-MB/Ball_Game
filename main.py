@@ -43,7 +43,7 @@ def apply_display_mode(fullscreen: bool) -> pygame.Surface:
 
 # Music configuration
 MUSIC_VOLUME = 0.5
-MUSIC_PATH = os.path.join('Sounds', 'BardsofWyverndale.mp3')
+MUSIC_PATH = os.path.join('sounds', 'bards_of_wyverndale.mp3')
 
 
 def wrap_text(font, text, max_width):
