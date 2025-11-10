@@ -6,6 +6,10 @@ A fast-paced 2D battle arena game built with Python, Pygame, and the Esper ECS (
 ![Python](https://img.shields.io/badge/python-3.8+-green)
 ![License](https://img.shields.io/badge/license-MIT-orange)
 
+## Versions
+
+The game was tested and made in Python 3.10.12, Esper 3.4 and Pygame 2.6.1
+
 ## 📋 Table of Contents
 
 - [Overview](#overview)
@@ -21,7 +25,7 @@ A fast-paced 2D battle arena game built with Python, Pygame, and the Esper ECS (
 
 ## 🎯 Overview
 
-Ball Game Arena is a physics-based 2D combat game where players control spherical characters in an arena. Each character has unique stats, weapons, and abilities. The game uses an Entity Component System (ECS) architecture for clean separation of data and logic, making it highly modular and extensible.
+Balls?!?! The Game is a physics-based 2D combat game where players control spherical characters in an arena. Each character has unique stats, weapons, and abilities. The game uses an Entity Component System (ECS) architecture for clean separation of data and logic, making it highly modular and extensible.
 
 ### Key Features:
 - **4 Unique Character Classes**: Knight, Mage, Samurai, and Ninja
