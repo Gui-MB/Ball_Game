@@ -1248,6 +1248,11 @@ class ManaSystem(esper.Processor):
 class SkillSystem(esper.Processor):
     """Handle skill effects and duration management."""
     
+    def __init__(self):
+        super().__init__()
+        # Store original radius values for entities with radius_boost active
+        self.original_radius = {}
+    
     def process(self, dt: float) -> None:
         """Process active skill effects for all entities.
         
@@ -1273,6 +1278,15 @@ class SkillSystem(esper.Processor):
                 if esper.has_component(ent, Health):
                     health = esper.component_for_entity(ent, Health)
                     health.current_hp = min(health.max_hp, health.current_hp + int(effect.effect_value))
+            
+            elif effect.effect_type == 'radius_boost':
+                # Apply radius boost (only once at the start)
+                if ent not in self.original_radius and esper.has_component(ent, Position):
+                    pos = esper.component_for_entity(ent, Position)
+                    self.original_radius[ent] = pos.radius
+                    pos.radius = int(pos.radius * effect.effect_value)
+                    if DEBUG_ENABLED:
+                        print(f"Entity {ent} radius boosted from {self.original_radius[ent]} to {pos.radius}")
 
             # Mark for removal if expired
             if effect.time_remaining <= 0:
@@ -1281,6 +1295,15 @@ class SkillSystem(esper.Processor):
         # Remove expired effects
         for ent, effect in effects_to_remove:
             try:
+                # Restore original radius if this was a radius_boost effect
+                if effect.effect_type == 'radius_boost' and ent in self.original_radius:
+                    if esper.entity_exists(ent) and esper.has_component(ent, Position):
+                        pos = esper.component_for_entity(ent, Position)
+                        pos.radius = self.original_radius[ent]
+                        if DEBUG_ENABLED:
+                            print(f"Entity {ent} radius restored to {pos.radius}")
+                    del self.original_radius[ent]
+                
                 esper.remove_component(ent, SkillEffect)
             except Exception:
                 pass

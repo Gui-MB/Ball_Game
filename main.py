@@ -201,11 +201,12 @@ CLASS_PRESETS = {
         'max_hp': 150, 'body_damage': 0, 'items': ['Katana'],
         'description': 'Samurai: aggressive duelist with a swift katana and heavy mass.'
     },
-    # 'Ninja': {
-    #     'radius': 30, 'color': (0, 255, 0), 'image_path': 'images/ninja.png',
-    #     'mass': 2.5, 'restitution': 1.0, 'speed_range': (700, 750),
-    #     'max_hp': 200, 'body_damage': 0, 'items': []
-    # },
+    'Ninja': {
+        'radius': 30, 'color': (0, 255, 0), 'image_path': 'images/spt_Balls/ninja.png',
+        'mass': 2.5, 'restitution': 1.001, 'speed_range': (700, 750),
+        'max_hp': 180, 'body_damage': 5, 'items': [],
+        'description': 'Ninja: swift and agile fighter who relies on body damage with no weapons. Fast movement compensates for lack of range.'
+    },
 
     # 'Necromancer': {
     #     'radius': 40, 'color': (255, 0, 165), 'image_path': 'images/necromancer.png',
@@ -246,6 +247,26 @@ SKILLS_PRESETS = {
         effect_duration=0.0,
         icon_color=(100, 255, 100),
         description='Restore 10 HP instantly.'
+    ),
+    'Giant': Skill(
+        name='Giant',
+        mana_cost=4.0,
+        cooldown=3.0,
+        effect_type='radius_boost',
+        effect_value=1.5,
+        effect_duration=3.0,
+        icon_color=(255, 200, 50),
+        description='Temporarily grow larger, increasing your radius by 50% for 3s.'
+    ),
+    'Shrink': Skill(
+        name='Shrink',
+        mana_cost=3.0,
+        cooldown=2.5,
+        effect_type='radius_boost',
+        effect_value=0.6,
+        effect_duration=2.5,
+        icon_color=(150, 100, 255),
+        description='Shrink your size, reducing your radius by 40% for 2.5s. Harder to hit!'
     ),
 }
 
@@ -806,7 +827,7 @@ def select_skills(
         else:
             screen.fill((10, 10, 10))
         
-        title = font.render('Select 4 Skills (P1: WASD/E + SPACE | P2: Arrows/Enter + RShift) - Click PRONTO or use SPACE/RShift to finish', True, (255, 255, 255))
+        title = font.render('Select 4 Skills (P1: WASD/E | P2: Arrows/Enter) - Click PRONTO to finish', True, (255, 255, 255))
         screen.blit(title, (SCREEN_WIDTH // 2 - title.get_width() // 2, 20))
         
         # Left side: Player 1
@@ -834,7 +855,7 @@ def select_skills(
         
         # Available skills for P1
         # Draw available skills as a horizontal list under the slots
-        avail_y = y + 20
+        avail_y = y + 70
         try:
             avail_title = font.render('Available:', True, (200, 200, 200))
             screen.blit(avail_title, (col1_x - avail_title.get_width() // 2, avail_y))
@@ -904,7 +925,7 @@ def select_skills(
         
         # Available skills for P2
         # Draw available skills as a horizontal list under the slots for P2
-        avail_y = y + 20
+        avail_y = y + 70
         try:
             avail_title = font.render('Available:', True, (200, 200, 200))
             screen.blit(avail_title, (col2_x - avail_title.get_width() // 2, avail_y))
@@ -970,7 +991,7 @@ def select_skills(
         try:
             col1_x = SCREEN_WIDTH // 4
             col2_x = 3 * SCREEN_WIDTH // 4
-            PRONTO_W, PRONTO_H = 120, 36
+            PRONTO_W, PRONTO_H = 120, 40
             y_start = 80
             slots_top = y_start + 40
             pronto_y = slots_top + 4 * 30 + 12
